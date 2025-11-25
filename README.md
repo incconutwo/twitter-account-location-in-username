@@ -2,6 +2,8 @@
 
 A browser extension that displays the country flag of X.com (Twitter) users next to their usernames and allows you to automatically hide posts based on specific countries.
 
+> **Enjoying the extension?** Please consider dropping a **Star ⭐** on this repository to show your support! It helps visibility a ton.
+
 ##  Key Features
 
 ### 🌎 Country Flags
@@ -89,6 +91,20 @@ Unlike older versions that required opening background windows, this version is 
 - **Twemoji:** Uses Twitter's open-source emoji library for consistent rendering across operating systems.
 - **Flag Data:** Country mapping logic based on standard ISO codes.
 - Originally forked from [RhysSullivan/twitter-account-location-in-username](https://github.com/RhysSullivan/twitter-account-location-in-username).
+
+## ❤️ Support the Project
+
+This extension is 100% free and open source. I built it because I wanted a cleaner, more transparent Twitter experience from bots/fake accounts for myself and the community.
+
+However, maintaining the **Community Database** (Cloudflare Workers) and keeping the API running smoothly does take time and resources.
+
+If you enjoy the extension, there are two easy ways to support it:
+
+1.  **⭐ Star this Repo:** It helps more people find the project and encourages me to keep shipping updates.
+2.  **☕ Buy me a Coffee:** If you want to help me continue and expand the project or/and help cover future Database costs, you can donate here:
+    *   [Ko-fi](https://ko-fi.com/incconutwo) thanks,
+
+Thanks for using the extension! 🚀
 
 ---
 *Note: This extension is for educational and personal customization purposes. It is not affiliated with X Corp.*
