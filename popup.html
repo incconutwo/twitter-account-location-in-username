@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 320px;
+      padding: 16px;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      color: #0f1419;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    
+    /* API Status Indicator */
+    .api-status {
+      font-size: 12px;
+      margin-bottom: 16px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      background: #f7f9f9;
+      font-weight: 500;
+      display: none; /* Hidden by default */
+    }
+    .api-status.green {
+      background: #e6f7ef;
+      color: #00ba7c;
+    }
+    .api-status.red {
+      background: #fef0f0;
+      color: #f4212e;
+    }
+    .api-status-icon {
+      margin-right: 6px;
+      font-size: 14px;
+    }
+
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px;
+      background: #f7f9f9;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+    .toggle-label {
+      font-weight: 500;
+    }
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      background: #ccd6dd;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-switch.enabled {
+      background: #1d9bf0;
+    }
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: white;
+      top: 2px;
+      left: 2px;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .toggle-switch.enabled::after {
+      transform: translateX(20px);
+    }
+    
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      margin-top: 16px;
+      margin-bottom: 8px;
+    }
+
+    /* Custom Dropdown CSS */
+    .custom-select-wrapper {
+      position: relative;
+      user-select: none;
+      width: 100%;
+      margin-bottom: 12px;
+    }
+    .custom-select {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+    }
+    .custom-select__trigger {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      font-size: 13px;
+      border: 1px solid #cfd9de;
+      border-radius: 4px;
+      cursor: pointer;
+      background: #fff;
+    }
+    .custom-options {
+      position: absolute;
+      display: block;
+      top: 100%;
+      left: 0;
+      right: 0;
+      border: 1px solid #cfd9de;
+      border-top: 0;
+      border-radius: 0 0 4px 4px;
+      background: #fff;
+      transition: all 0.2s;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      z-index: 100;
+      max-height: 200px;
+      overflow-y: auto;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      margin-top: 2px;
+    }
+    .custom-select.open .custom-options {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: all;
+      position: relative; /* Changed from default absolute behavior */
+      top: auto;
+      margin-bottom: 12px; /* Add space below the dropdown */
+    }
+    .custom-option {
+      position: relative;
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .custom-option:hover {
+      background-color: #f7f9f9;
+    }
+    .custom-option.selected {
+      display: none;
+    }
+    .custom-option img {
+      margin-right: 8px;
+      width: 1.2em;
+      height: 1.2em;
+    }
+    .arrow {
+      position: relative;
+      height: 10px;
+      width: 10px;
+    }
+    .arrow::before, .arrow::after {
+      content: "";
+      position: absolute;
+      bottom: 0px;
+      width: 0.15rem;
+      height: 100%;
+      transition: all 0.2s;
+    }
+    .arrow::before {
+      left: -2px;
+      transform: rotate(-45deg);
+      background-color: #536471;
+    }
+    .arrow::after {
+      left: 2px;
+      transform: rotate(45deg);
+      background-color: #536471;
+    }
+    .open .arrow::before {
+      left: -2px;
+      transform: rotate(45deg);
+    }
+    .open .arrow::after {
+      left: 2px;
+      transform: rotate(-45deg);
+    }
+
+    .blocked-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      background: #eff3f4;
+      border-radius: 16px;
+      padding: 4px 12px;
+      font-size: 12px;
+      border: 1px solid #cfd9de;
+    }
+    .chip img {
+      margin-right: 4px;
+      width: 1.2em;
+      height: 1.2em;
+      vertical-align: text-bottom;
+    }
+    .chip-remove {
+      margin-left: 6px;
+      cursor: pointer;
+      color: #536471;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+    }
+    .chip-remove:hover {
+      background-color: rgba(0,0,0,0.1);
+      color: #0f1419;
+    }
+    .info {
+      font-size: 12px;
+      color: #536471;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #eff3f4;
+    }
+    .empty-msg {
+      color: #536471;
+      font-style: italic;
+      font-size: 12px;
+    }
+
+    /* DARK MODE SUPPORT */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background-color: #15202b; /* Twitter Dim background */
+        color: #f7f9f9;
+      }
+      
+      .toggle-container, .api-status {
+        background: #1e2732;
+      }
+      
+      .toggle-label, .input-label, .section-title {
+        color: #f7f9f9;
+      }
+      
+      .toggle-switch {
+        background: #38444d;
+      }
+      
+      .custom-select__trigger, .custom-options {
+        background: #15202b;
+        border-color: #38444d;
+        color: #f7f9f9;
+      }
+      
+      .custom-option {
+        color: #f7f9f9;
+      }
+      
+      .custom-option:hover {
+        background-color: #1e2732;
+      }
+      
+      .chip {
+        background: #1e2732;
+        border-color: #38444d;
+        color: #f7f9f9;
+      }
+      
+      .chip-remove {
+        color: #8b98a5;
+      }
+      
+      .chip-remove:hover {
+        background-color: rgba(255,255,255,0.1);
+        color: #fff;
+      }
+      
+      .arrow::before, .arrow::after {
+        background-color: #8b98a5;
+      }
+      
+      .info, .empty-msg {
+        color: #8b98a5;
+        border-top-color: #38444d;
+      }
+      
+      .blocked-section {
+        border-top-color: #38444d;
+      }
+      
+      /* Adjust Status Colors for Dark Mode */
+      .api-status.green {
+        background: rgba(0, 186, 124, 0.1);
+        color: #00ba7c;
+      }
+      .api-status.red {
+        background: rgba(244, 33, 46, 0.1);
+        color: #f4212e;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Location Flag & Blocker</h1>
+  </div>
+
+  <div id="apiStatus" class="api-status">
+    <span class="api-status-icon">⚪</span> Checking status...
+  </div>
+  
+  <div class="toggle-container">
+    <span class="toggle-label">Enable Extension</span>
+    <div class="toggle-switch" id="toggleSwitch"></div>
+  </div>
+  
+  <div class="section-title">Block posts from:</div>
+  <div class="custom-select-wrapper">
+    <div class="custom-select" id="customSelect">
+      <div class="custom-select__trigger">
+        <span>Select a country...</span>
+        <div class="arrow"></div>
+      </div>
+      <div class="custom-options" id="customOptions">
+        <!-- Options injected by JS -->
+      </div>
+    </div>
+  </div>
+    
+  <div id="blockedList" class="blocked-list"></div>
+  
+  <div class="info">
+    Selected locations will be hidden from your feed.
+  </div>
+
+  <script src="countryFlags.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
