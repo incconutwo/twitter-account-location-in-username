@@ -58,21 +58,34 @@ function checkRateLimitStatus() {
 function updateStatusUI(status, resetTime) {
   apiStatusEl.className = 'api-status';
   apiStatusEl.style.display = 'flex'; // Ensure visible
+  apiStatusEl.textContent = ''; // Clear existing content safely
+
+  const icon = document.createElement('span');
+  icon.className = 'api-status-icon';
+  
+  const textNode = document.createTextNode('');
   
   if (status === 'good') {
     apiStatusEl.classList.add('green');
-    apiStatusEl.innerHTML = '<span class="api-status-icon">✅</span> API Status: Good';
+    icon.textContent = '✅';
+    textNode.textContent = ' API Status: Good';
   } else if (status === 'limited') {
     apiStatusEl.classList.add('red');
     const now = Math.floor(Date.now() / 1000);
     const minutesLeft = Math.max(0, Math.ceil((resetTime - now) / 60));
-    apiStatusEl.innerHTML = `<span class="api-status-icon">⚠️</span> Rate Limited (${minutesLeft}m left)`;
+    icon.textContent = '⚠️';
+    textNode.textContent = ` Rate Limited (${minutesLeft}m left)`;
   } else if (status === 'inactive') {
-    apiStatusEl.innerHTML = '<span class="api-status-icon">ℹ️</span> Go to X.com to use';
     apiStatusEl.style.color = '#536471';
+    icon.textContent = 'ℹ️';
+    textNode.textContent = ' Go to X.com to use';
   } else {
-    apiStatusEl.innerHTML = '<span class="api-status-icon">⚪</span> Status: Unknown';
+    icon.textContent = '⚪';
+    textNode.textContent = ' Status: Unknown';
   }
+
+  apiStatusEl.appendChild(icon);
+  apiStatusEl.appendChild(textNode);
 }
 
 // Populate the dropdown (Lazy Load)

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "X/Twitter Country Flags & Blocker",
   "version": "1.0.0",
-  "description": "Adds country flags to X (Twitter) usernames and lets you auto-hide posts from specific countries. Fast, private, and community-driven.",
+  "description": "Adds country flags to X/Twitter usernames and lets you auto-hide posts from specific countries. Fast, private, and community-driven.",
   "permissions": [
     "activeTab",
     "storage",
@@ -47,8 +47,13 @@
   ],
   "browser_specific_settings": {
     "gecko": {
-      "id": "twitter-flags@yourname.com",
-      "strict_min_version": "109.0"
+      "id": "twitter-flags@incconutwo.com",
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": [
+          "websiteContent"
+        ]
+      }
     }
   }
 }
