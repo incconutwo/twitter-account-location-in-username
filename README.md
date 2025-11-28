@@ -4,6 +4,12 @@ A browser extension that displays the country flag of X.com (Twitter) users next
 
 > **Enjoying the extension?** Please consider dropping a **Star ⭐** on this repository to show your support! It helps visibility a ton.
 
+## Install from Chrome Web Store and Firefox Add-ons 
+
+🔗 Chrome: [chrome web store](https://chromewebstore.google.com/detail/xtwitter-country-flags-bl/dgodabjkaifjlhpcapiohikkklnailla?authuser=0&hl=en)
+
+🦊 Firefox: [Firefox add-ons store](https://addons.mozilla.org/fr/firefox/addon/x-twitter-flags-blocker/)
+
 ##  Key Features
 
 ### 🌎 Country Flags
@@ -30,7 +36,7 @@ There is now a crowdsourced database for location data. This makes the extension
 - **Viewport Prefetching:** Uses an `IntersectionObserver` to "look ahead" (approx. 5-8 tweets) and fetch data before the tweet scrolls into view.
 - **Rate Limit Protection:** Automatically detects API rate limits and pauses requests until the reset window, preventing temporary bans.
 
-## Installation
+## Manual Installation
 
 1. Download or clone this repository.
 2. Open Chrome and go to `chrome://extensions/`.
@@ -55,11 +61,7 @@ Since this version is not yet on the Firefox Add-ons Store, you need to load it 
 
 Clone the repo **OR** Download/Extract the zip → Navigate to `chrome://extensions` → Enable **Developer mode** → Click **Load unpacked** and select the *unpacked* project folder → Pin the extension from the puzzle icon.
 
----
 
-## Install from Chrome Web Store and Firefox Add-ons (coming very soon)
-
-In the works. This section will be updated once the extension is published on the Chrome Web Store.
 
 ## Usage
 
