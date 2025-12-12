@@ -3,7 +3,8 @@ const CLOUD_API_URL = 'https://twitter-countries-api.tnemoroccan.workers.dev';
 // Cache Configuration
 const CACHE_KEY = 'twitter_location_cache';
 const CACHE_EXPIRY_DAYS = 30; 
-const CACHE_EXPIRY_NO_LOC_DAYS = 3;
+const CACHE_STALE_DAYS = 90;
+const CACHE_EXPIRY_NO_LOC_DAYS = 14;
 const MAX_CACHE_SIZE = 5000; 
 
 // State
@@ -31,6 +32,8 @@ let blockedCountries = [];
 const TOGGLE_KEY = 'extension_enabled';
 const BLOCKED_COUNTRIES_KEY = 'blocked_countries';
 const DEFAULT_ENABLED = true;
+
+const TARGET_SELECTORS = 'article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="User-Names"], [data-testid="User-Name"]';
 
 // --- CROSS-BROWSER HELPER ---
 function storageGet(keys) {
@@ -136,27 +139,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 async function loadCache() {
   try {
     if (!chrome.runtime?.id) return;
-    const result = await storageGet(CACHE_KEY);
-    if (result[CACHE_KEY]) {
-      const cached = result[CACHE_KEY];
-      const now = Date.now();
-      for (const [username, data] of Object.entries(cached)) {
-        let location = null;
-        let expiry = 0;
-        if (typeof data === 'string' || data === null) {
-          location = data;
-          expiry = 0; 
-        } else if (typeof data === 'object') {
-          location = data.location;
-          expiry = data.expiry || 0;
+    const storageResult = await storageGet(CACHE_KEY);
+    if (storageResult[CACHE_KEY]) {
+      const cachedDataMap = storageResult[CACHE_KEY];
+      const currentTimeMs = Date.now();
+      
+      const staleThresholdTimestamp = currentTimeMs - (CACHE_STALE_DAYS * 24 * 60 * 60 * 1000);
+      
+      for (const [username, cacheEntry] of Object.entries(cachedDataMap)) {
+        let locationName = null;
+        let expirationTimestamp = 0;
+        
+        // Handle legacy format (string) vs new format (object)
+        if (typeof cacheEntry === 'string' || cacheEntry === null) {
+          locationName = cacheEntry;
+          expirationTimestamp = currentTimeMs + (CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000); 
+        } else {
+          locationName = cacheEntry.location;
+          expirationTimestamp = cacheEntry.expiry || 0;
         }
-        if (expiry > now) {
-          locationCache.set(username, { location, expiry });
+
+        const staleGracePeriodMs = (CACHE_STALE_DAYS - CACHE_EXPIRY_DAYS) * 24 * 60 * 60 * 1000;
+        
+        if (expirationTimestamp + staleGracePeriodMs > currentTimeMs) {
+          locationCache.set(username, { location: locationName, expiry: expirationTimestamp });
         }
       }
       if (locationCache.size > MAX_CACHE_SIZE) cleanCache();
     }
-  } catch (error) {}
+  } catch (loadingError) {}
 }
 
 async function saveCache() {
@@ -191,23 +202,23 @@ function saveCacheEntry(username, location) {
 }
 
 function cleanCache() {
-  const now = Date.now();
-  let deletedCount = 0;
-  for (const [key, val] of locationCache) {
-    if (val.expiry <= now) {
-      locationCache.delete(key);
-      deletedCount++;
+  const currentTimeMs = Date.now();
+  let expiredEntriesCount = 0;
+  for (const [username, cacheEntry] of locationCache) {
+    if (cacheEntry.expiry <= currentTimeMs) {
+      locationCache.delete(username);
+      expiredEntriesCount++;
     }
   }
   if (locationCache.size > MAX_CACHE_SIZE) {
-    const toDelete = locationCache.size - MAX_CACHE_SIZE;
-    const keys = locationCache.keys();
-    for (let i = 0; i < toDelete; i++) {
-      locationCache.delete(keys.next().value);
-      deletedCount++;
+    const entriesToRemoveCount = locationCache.size - MAX_CACHE_SIZE;
+    const cacheKeysIterator = locationCache.keys();
+    for (let i = 0; i < entriesToRemoveCount; i++) {
+      locationCache.delete(cacheKeysIterator.next().value);
+      expiredEntriesCount++;
     }
   }
-  if (deletedCount > 0) hasUnsavedChanges = true;
+  if (expiredEntriesCount > 0) hasUnsavedChanges = true;
 }
 
 window.addEventListener('pagehide', () => {
@@ -215,6 +226,7 @@ window.addEventListener('pagehide', () => {
     clearTimeout(saveCache.timeout);
     saveCache(); 
   }
+  flushWriteBuffer();
 });
 
 document.addEventListener('visibilitychange', () => {
@@ -251,15 +263,44 @@ async function fetchFromCloud(usernames) {
   }
 }
 
-function submitToCloud(username, location) {
-  if (submittedSessionCache.has(username)) return;
-  if (!location) return;
-  submittedSessionCache.add(username);
+// BATCH WRITE OPTIMIZATION
+let writeBuffer = [];
+let writeTimer = null;
+const BATCH_SIZE = 25;
+const BATCH_DELAY = 30000; // 30 seconds
+
+function flushWriteBuffer() {
+  if (writeTimer) {
+    clearTimeout(writeTimer);
+    writeTimer = null;
+  }
+  
+  if (writeBuffer.length === 0) return;
+  
+  const batch = [...writeBuffer];
+  writeBuffer = []; // Clear buffer immediately to prevent duplicates
+
+  // NOTE: Worker must be updated to handle a JSON Array of objects
   fetch(`${CLOUD_API_URL}/submit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, location })
-  }).then(res => {}).catch(() => {});
+    body: JSON.stringify(batch),
+    keepalive: true // Ensures request completes even if tab closes
+  }).catch(() => {});
+}
+
+function submitToCloud(username, location) {
+  if (submittedSessionCache.has(username)) return;
+  if (!location) return;
+  
+  submittedSessionCache.add(username);
+  writeBuffer.push({ username, location });
+  
+  if (writeBuffer.length >= BATCH_SIZE) {
+    flushWriteBuffer();
+  } else if (!writeTimer) {
+    writeTimer = setTimeout(flushWriteBuffer, BATCH_DELAY);
+  }
 }
 
 // --- FAST LANE: CLOUD QUEUE ---
@@ -268,38 +309,45 @@ async function processCloudQueue() {
   if (isProcessingCloud || cloudQueue.length === 0) return;
   isProcessingCloud = true;
 
-  const batch = [];
-  while (cloudQueue.length > 0 && batch.length < 20) {
-    batch.push(cloudQueue.shift());
+  const requestBatch = [];
+  while (cloudQueue.length > 0 && requestBatch.length < 20) {
+    requestBatch.push(cloudQueue.shift());
   }
 
-  if (batch.length === 0) {
+  if (requestBatch.length === 0) {
     isProcessingCloud = false;
     return;
   }
 
-  const usernames = batch.map(item => item.screenName);
+  const batchScreenNames = requestBatch.map(request => request.screenName);
+  const uniqueScreenNames = [...new Set(batchScreenNames)];
   
-  let cloudResults = {};
+  let cloudLocationMap = {};
   try {
-    cloudResults = await fetchFromCloud(usernames);
-  } catch (e) {}
+    cloudLocationMap = await fetchFromCloud(uniqueScreenNames);
+  } catch (fetchError) {}
   
-  const missingFromCloud = [];
+  const requestsMissingFromCloud = [];
 
-  for (const item of batch) {
-    const cloudLoc = cloudResults[item.screenName.toLowerCase()];
-    if (cloudLoc) {
-      saveCacheEntry(item.screenName, cloudLoc); 
-      item.resolve(cloudLoc);
-      queuedUsernames.delete(item.screenName);
+  for (const request of requestBatch) {
+    const normalizedScreenName = request.screenName.toLowerCase();
+    const locationFromCloud = cloudLocationMap[normalizedScreenName];
+    
+    if (locationFromCloud !== undefined) {
+      saveCacheEntry(request.screenName, locationFromCloud); 
+      if (request.resolve) request.resolve(locationFromCloud);
+      queuedUsernames.delete(request.screenName);
     } else {
-      missingFromCloud.push(item);
+      if (request.resolve && request.resolve.length > 0) { 
+        requestsMissingFromCloud.push(request);
+      } else {
+        queuedUsernames.delete(request.screenName);
+      }
     }
   }
 
-  if (missingFromCloud.length > 0) {
-    missingFromCloud.forEach(item => twitterQueue.push(item));
+  if (requestsMissingFromCloud.length > 0) {
+    requestsMissingFromCloud.forEach(request => twitterQueue.push(request));
     processTwitterQueue();
   }
 
@@ -315,36 +363,36 @@ async function processCloudQueue() {
 async function processTwitterQueue() {
   if (isProcessingTwitter || twitterQueue.length === 0) return;
   
-  const now = Math.floor(Date.now() / 1000);
-  if (rateLimitResetTime > now) {
-    const waitTime = (rateLimitResetTime - now) * 1000;
-    setTimeout(processTwitterQueue, Math.min(waitTime, 30000));
+  const currentTimeSeconds = Math.floor(Date.now() / 1000);
+  if (rateLimitResetTime > currentTimeSeconds) {
+    const waitTimeMs = (rateLimitResetTime - currentTimeSeconds) * 1000;
+    setTimeout(processTwitterQueue, Math.min(waitTimeMs, 30000));
     return;
   }
 
   isProcessingTwitter = true;
 
-  const item = twitterQueue.shift();
+  const currentTwitterRequest = twitterQueue.shift();
   
-  if (!item) {
+  if (!currentTwitterRequest) {
     isProcessingTwitter = false;
     return;
   }
 
   try {
-    const location = await makeLocationRequest(item.screenName);
-    item.resolve(location);
-    queuedUsernames.delete(item.screenName);
+    const location = await makeLocationRequest(currentTwitterRequest.screenName);
+    currentTwitterRequest.resolve(location);
+    queuedUsernames.delete(currentTwitterRequest.screenName);
     
-    if (location) submitToCloud(item.screenName, location);
+    if (location) submitToCloud(currentTwitterRequest.screenName, location);
     
     setTimeout(() => {
       isProcessingTwitter = false;
       processTwitterQueue();
     }, 1500);
     
-  } catch (e) {
-    item.reject(e);
+  } catch (requestError) {
+    currentTwitterRequest.reject(requestError);
     isProcessingTwitter = false;
     processTwitterQueue();
   }
@@ -352,30 +400,30 @@ async function processTwitterQueue() {
 
 function makeLocationRequest(screenName) {
   return new Promise((resolve, reject) => {
-    const requestId = Date.now() + Math.random();
+    const uniqueRequestId = Date.now() + Math.random();
     
-    const handler = (event) => {
+    const locationResponseHandler = (event) => {
       if (event.source !== window) return;
       
       if (event.data && 
           event.data.type === '__locationResponse' &&
           event.data.screenName === screenName && 
-          event.data.requestId === requestId) {
-        window.removeEventListener('message', handler);
-        const location = event.data.location;
+          event.data.requestId === uniqueRequestId) {
+        window.removeEventListener('message', locationResponseHandler);
+        const locationData = event.data.location;
         const isRateLimited = event.data.isRateLimited || false;
         
         if (!isRateLimited) {
-          saveCacheEntry(screenName, location || null);
+          saveCacheEntry(screenName, locationData || null);
         }
-        resolve(location || null);
+        resolve(locationData || null);
       }
     };
-    window.addEventListener('message', handler);
-    window.postMessage({ type: '__fetchLocation', screenName, requestId }, '*');
+    window.addEventListener('message', locationResponseHandler);
+    window.postMessage({ type: '__fetchLocation', screenName, requestId: uniqueRequestId }, '*');
     
     setTimeout(() => {
-      window.removeEventListener('message', handler);
+      window.removeEventListener('message', locationResponseHandler);
       resolve(null);
     }, 10000);
   });
@@ -384,7 +432,22 @@ function makeLocationRequest(screenName) {
 async function getUserLocation(screenName) {
   if (locationCache.has(screenName)) {
     const data = locationCache.get(screenName);
-    if (Date.now() < data.expiry) return data.location;
+    const now = Date.now();
+    
+    if (now < data.expiry) {
+      return data.location;
+    }
+    
+    const staleLimit = data.expiry + ((CACHE_STALE_DAYS - CACHE_EXPIRY_DAYS) * 24 * 60 * 60 * 1000);
+    if (now < staleLimit) {
+      if (!queuedUsernames.has(screenName)) {
+        queuedUsernames.add(screenName);
+        cloudQueue.push({ screenName, resolve: () => {}, reject: () => {} });
+        if (!isProcessingCloud) setTimeout(processCloudQueue, 100);
+      }
+      return data.location;
+    }
+    
     locationCache.delete(screenName);
   }
   
@@ -395,10 +458,7 @@ async function getUserLocation(screenName) {
   return new Promise((resolve, reject) => {
     queuedUsernames.add(screenName);
     cloudQueue.push({ screenName, resolve, reject });
-    
-    if (!isProcessingCloud) {
-      setTimeout(processCloudQueue, 100);
-    }
+    if (!isProcessingCloud) setTimeout(processCloudQueue, 100);
   });
 }
 
@@ -531,23 +591,44 @@ function removeAllFlags() {
   if (viewportObserver) viewportObserver.disconnect();
 }
 
+function observeNode(node) {
+   if (node.dataset.flagAdded || node.dataset.observing) return;
+   node.dataset.observing = 'true';
+   viewportObserver.observe(node);
+}
+
 async function processUsernames() {
   if (!extensionEnabled) return;
-  const containers = document.querySelectorAll('article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="User-Names"], [data-testid="User-Name"]');
+  const containers = document.querySelectorAll(TARGET_SELECTORS);
   for (const container of containers) {
-    if (container.dataset.flagAdded || container.dataset.observing) continue;
-    container.dataset.observing = 'true';
-    viewportObserver.observe(container);
+    observeNode(container);
   }
 }
 
 function initObserver() {
   if (observer) observer.disconnect();
+  
   observer = new MutationObserver((mutations) => {
-    if (extensionEnabled && mutations.some(m => m.addedNodes.length > 0)) {
-      setTimeout(processUsernames, 500);
+    if (!extensionEnabled) return;
+    
+    // Efficiently process ONLY new nodes
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType === 1) { // Element node
+          // Check the node itself
+          if (node.matches(TARGET_SELECTORS)) {
+            observeNode(node);
+          }
+          // Check children (e.g. when a whole timeline load)
+          const children = node.querySelectorAll(TARGET_SELECTORS);
+          for (const child of children) {
+            observeNode(child);
+          }
+        }
+      }
     }
   });
+  
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
