@@ -326,7 +326,13 @@ async function initUpdateCheck() {
     if (res.ok) {
       const data = await res.json();
       if (isNewerVersion(data.version, manifest.version)) {
-        showUpdateBanner(data.version);
+        chrome.storage.local.get('dismissed_update_version', (result) => {
+          if (result.dismissed_update_version === data.version) {
+            showUpdateBanner(data.version);
+          } else {
+            showFullScreenUpdate(data.version);
+          }
+        });
       }
     }
   } catch (e) { /* Ignore network errors */ }
@@ -372,7 +378,7 @@ function renderDebugUI() {
   `;
   document.body.appendChild(panel);
 
-  document.getElementById('dbg-test-update').onclick = () => showUpdateBanner('9.9.9-TEST');
+  document.getElementById('dbg-test-update').onclick = () => showFullScreenUpdate('9.9.9-TEST');
   document.getElementById('dbg-clear-cache').onclick = () => {
     chrome.storage.local.remove('twitter_location_cache', () => {
       const btn = document.getElementById('dbg-clear-cache');
@@ -400,6 +406,46 @@ function showUpdateBanner(version) {
   
   const header = document.querySelector('.header');
   if (header) header.parentNode.insertBefore(banner, header.nextSibling);
+}
+
+function showFullScreenUpdate(version) {
+  if (document.querySelector('.update-modal')) return;
+
+  const style = document.createElement('style');
+  style.textContent = `
+    .update-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #ffffff; z-index: 2000; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; text-align: center; animation: fadeIn 0.2s; }
+    .update-modal h2 { margin: 0 0 12px; font-size: 18px; color: #0f1419; font-weight: 800; }
+    .update-modal p { margin: 0 0 24px; color: #536471; font-size: 14px; line-height: 1.5; }
+    .update-modal-btn { background: #1d9bf0; color: #fff; border: none; padding: 10px 24px; border-radius: 9999px; font-weight: 700; text-decoration: none; margin-bottom: 16px; font-size: 14px; cursor: pointer; transition: background 0.2s; box-shadow: 0 4px 12px rgba(29, 155, 240, 0.2); }
+    .update-modal-btn:hover { background: #1a8cd8; }
+    .update-dismiss { background: none; border: none; color: #536471; cursor: pointer; font-size: 13px; font-weight: 500; padding: 8px; }
+    .update-dismiss:hover { text-decoration: underline; color: #0f1419; }
+    @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+    @media (prefers-color-scheme: dark) {
+      .update-modal { background: #15202b; }
+      .update-modal h2 { color: #f7f9f9; }
+      .update-modal p, .update-dismiss { color: #8b98a5; }
+      .update-dismiss:hover { color: #f7f9f9; }
+    }
+  `;
+  document.head.appendChild(style);
+
+  const modal = document.createElement('div');
+  modal.className = 'update-modal';
+  modal.innerHTML = `
+    <h2>Update Available</h2>
+    <p>A new version <b>${version}</b> is ready to install.</p>
+    <a href="${REPO_URL}" target="_blank" class="update-modal-btn">Get Update</a>
+    <button class="update-dismiss">Remind me later</button>
+  `;
+
+  modal.querySelector('.update-dismiss').addEventListener('click', () => {
+    chrome.storage.local.set({ 'dismissed_update_version': version });
+    modal.remove();
+    showUpdateBanner(version);
+  });
+
+  document.body.appendChild(modal);
 }
 
 function isNewerVersion(latest, current) {

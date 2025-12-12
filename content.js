@@ -10,6 +10,8 @@ const MAX_CACHE_SIZE = 5000;
 // State
 let locationCache = new Map();
 let hasUnsavedChanges = false;
+const SUBMISSION_HISTORY_KEY = 'submission_history';
+let submissionHistory = new Set();
 
 // Queues
 const cloudQueue = []; 
@@ -82,11 +84,14 @@ const viewportObserver = new IntersectionObserver((entries) => {
 
 async function loadSettings() {
   try {
-    const result = await storageGet([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY]);
+    const result = await storageGet([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, SUBMISSION_HISTORY_KEY]);
     extensionEnabled = result[TOGGLE_KEY] !== undefined ? result[TOGGLE_KEY] : DEFAULT_ENABLED;
     
     if (result[BLOCKED_COUNTRIES_KEY]) {
       updateBlockedCountries(result[BLOCKED_COUNTRIES_KEY]);
+    }
+    if (result[SUBMISSION_HISTORY_KEY] && Array.isArray(result[SUBMISSION_HISTORY_KEY])) {
+      submissionHistory = new Set(result[SUBMISSION_HISTORY_KEY]);
     }
   } catch (error) {}
 }
@@ -292,8 +297,35 @@ function flushWriteBuffer() {
 function submitToCloud(username, location) {
   if (submittedSessionCache.has(username)) return;
   if (!location) return;
+
+  // 1. Strict Deduplication: If we've ever submitted this user, don't do it again.
+  if (submissionHistory.has(username)) return;
+
+  // 2. Cache Check: If the Cloud/Cache already knows this location, don't submit.
+  if (locationCache.has(username)) {
+    const cached = locationCache.get(username);
+    // If our scraped location matches the cached location, it's redundant.
+    if (cached.location === location) {
+      // Mark as submitted so we don't check again this session
+      submittedSessionCache.add(username);
+      return;
+    }
+  }
   
   submittedSessionCache.add(username);
+  submissionHistory.add(username);
+  
+  // Prune history if too large (keep recent 2000 submissions)
+  if (submissionHistory.size > 2000) {
+    const it = submissionHistory.values();
+    for (let i = 0; i < 500; i++) {
+      submissionHistory.delete(it.next().value);
+    }
+  }
+  
+  // Persist history asynchronously
+  storageSet({ [SUBMISSION_HISTORY_KEY]: Array.from(submissionHistory) });
+
   writeBuffer.push({ username, location });
   
   if (writeBuffer.length >= BATCH_SIZE) {
@@ -599,9 +631,10 @@ function observeNode(node) {
 
 async function processUsernames() {
   if (!extensionEnabled) return;
-  const containers = document.querySelectorAll(TARGET_SELECTORS);
-  for (const container of containers) {
-    observeNode(container);
+  // Use a targeted selector for un-observed nodes to minimize loop overhead
+  const containers = document.querySelectorAll(`${TARGET_SELECTORS}:not([data-observing="true"])`);
+  for (let i = 0; i < containers.length; i++) {
+    observeNode(containers[i]);
   }
 }
 
@@ -611,25 +644,30 @@ function initObserver() {
   observer = new MutationObserver((mutations) => {
     if (!extensionEnabled) return;
     
-    // Efficiently process ONLY new nodes
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if (node.nodeType === 1) { // Element node
-          // Check the node itself
-          if (node.matches(TARGET_SELECTORS)) {
-            observeNode(node);
-          }
-          // Check children (e.g. when a whole timeline load)
+    for (let i = 0; i < mutations.length; i++) {
+      const addedNodes = mutations[i].addedNodes;
+      for (let j = 0; j < addedNodes.length; j++) {
+        const node = addedNodes[j];
+        if (node.nodeType !== 1) continue;
+
+        // Targeted check for the specific containers we care about
+        if (node.matches(TARGET_SELECTORS)) {
+          observeNode(node);
+        } else {
+          // Only query the subtree of the newly added node
           const children = node.querySelectorAll(TARGET_SELECTORS);
-          for (const child of children) {
-            observeNode(child);
+          for (let k = 0; k < children.length; k++) {
+            observeNode(children[k]);
           }
         }
       }
     }
   });
   
-  observer.observe(document.body, { childList: true, subtree: true });
+  observer.observe(document.body, { 
+    childList: true, 
+    subtree: true 
+  });
 }
 
 async function init() {
@@ -638,17 +676,32 @@ async function init() {
   
   if (!extensionEnabled) return;
   
+  // Add preconnection to speed up initial network handshake
+  const link = document.createElement('link');
+  link.rel = 'preconnect';
+  link.href = CLOUD_API_URL;
+  document.head.appendChild(link);
+
   injectPageScript();
-  setTimeout(processUsernames, 2000);
+  
+  // Process initial set immediately without 2s delay
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    processUsernames();
+  } else {
+    document.addEventListener('DOMContentLoaded', processUsernames);
+  }
+
   initObserver();
   
   let lastUrl = location.href;
-  new MutationObserver(() => {
+  const navObserver = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      setTimeout(processUsernames, 2000);
+      // Debounce slightly for DOM stability, but much faster than 2s
+      setTimeout(processUsernames, 100);
     }
-  }).observe(document, { subtree: true, childList: true });
+  });
+  navObserver.observe(document.head, { subtree: true, childList: true });
   
   setInterval(saveCache, 30000);
 }
