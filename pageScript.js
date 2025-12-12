@@ -1,5 +1,6 @@
 // This script runs in the page context to access cookies and make API calls
 (function() {
+  const EXTENSION_ID = document.currentScript.getAttribute('data-extension-id');
   // Store headers from Twitter's own API calls
   let twitterHeaders = null;
   let headersReady = false;
@@ -82,7 +83,11 @@
   
   // Listen for fetch requests from content script via postMessage
   window.addEventListener('message', async function(event) {
-    // Only accept messages from our extension
+    // 1. Security: Ensure message is from the same window
+    if (event.source !== window) return;
+    // 2. Security: Check for a specific signature/ID
+    if (!event.data || event.data.target !== 'pageScript') return;
+    
     if (event.data && event.data.type === '__fetchLocation') {
       const { screenName, requestId } = event.data;
       
@@ -131,6 +136,7 @@
               
               // Store rate limit info for content script
               window.postMessage({
+                target: 'contentScript',
                 type: '__rateLimitInfo',
                 resetTime: parseInt(resetTime),
                 waitTime: Math.max(0, waitTime)
@@ -142,6 +148,7 @@
         // Send response back to content script via postMessage
         // Include error status so content script knows not to cache on rate limit
         window.postMessage({
+          target: 'contentScript',
           type: '__locationResponse',
           screenName,
           location,
@@ -150,6 +157,7 @@
         }, '*');
       } catch (error) {
         window.postMessage({
+          target: 'contentScript',
           type: '__locationResponse',
           screenName,
           location: null,

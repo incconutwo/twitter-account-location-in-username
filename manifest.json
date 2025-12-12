@@ -22,6 +22,9 @@
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
+  "background": {
+    "service_worker": "background.js"
+  },
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*"

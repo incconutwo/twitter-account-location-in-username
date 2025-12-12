@@ -23,6 +23,7 @@ const submittedSessionCache = new Set();
 let isProcessingCloud = false;
 let isProcessingTwitter = false;
 let rateLimitResetTime = 0; 
+let saveCacheTimeout = null;
 
 // Observers
 let observer = null;
@@ -37,9 +38,37 @@ const DEFAULT_ENABLED = true;
 
 const TARGET_SELECTORS = 'article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="User-Names"], [data-testid="User-Name"]';
 
+// --- CSS INJECTION (Performance) ---
+function injectStyles() {
+  if (document.getElementById('twitter-flags-style')) return;
+  const style = document.createElement('style');
+  style.id = 'twitter-flags-style';
+  style.textContent = `
+    .tf-flag {
+      contain: layout style;
+      margin: 0 4px;
+      display: inline-flex;
+      align-items: center;
+      vertical-align: middle;
+      height: 1.2em;
+    }
+    .tf-flag img {
+      height: 1.2em;
+      width: auto;
+      display: block;
+    }
+  `;
+  (document.head || document.documentElement).appendChild(style);
+}
+
 // --- CROSS-BROWSER HELPER ---
+function isContextInvalid() {
+  return !chrome.runtime?.id;
+}
+
 function storageGet(keys) {
   return new Promise((resolve) => {
+    if (isContextInvalid()) return resolve({});
     if (typeof browser !== 'undefined' && browser.storage) {
       browser.storage.local.get(keys).then(resolve);
     } else {
@@ -50,6 +79,7 @@ function storageGet(keys) {
 
 function storageSet(data) {
   return new Promise((resolve) => {
+    if (isContextInvalid()) return resolve();
     if (typeof browser !== 'undefined' && browser.storage) {
       browser.storage.local.set(data).then(resolve);
     } else {
@@ -143,19 +173,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 async function loadCache() {
   try {
-    if (!chrome.runtime?.id) return;
+    if (isContextInvalid()) return;
     const storageResult = await storageGet(CACHE_KEY);
     if (storageResult[CACHE_KEY]) {
       const cachedDataMap = storageResult[CACHE_KEY];
       const currentTimeMs = Date.now();
       
-      const staleThresholdTimestamp = currentTimeMs - (CACHE_STALE_DAYS * 24 * 60 * 60 * 1000);
-      
       for (const [username, cacheEntry] of Object.entries(cachedDataMap)) {
         let locationName = null;
         let expirationTimestamp = 0;
         
-        // Handle legacy format (string) vs new format (object)
         if (typeof cacheEntry === 'string' || cacheEntry === null) {
           locationName = cacheEntry;
           expirationTimestamp = currentTimeMs + (CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000); 
@@ -177,7 +204,7 @@ async function loadCache() {
 
 async function saveCache() {
   try {
-    if (!hasUnsavedChanges || !chrome.runtime?.id) return;
+    if (!hasUnsavedChanges || isContextInvalid()) return;
     const cacheObj = {};
     const now = Date.now();
     for (const [username, data] of locationCache.entries()) {
@@ -191,19 +218,17 @@ async function saveCache() {
 }
 
 function saveCacheEntry(username, location) {
-  if (!chrome.runtime?.id) return;
+  if (isContextInvalid()) return;
   const now = Date.now();
   const days = location === null ? CACHE_EXPIRY_NO_LOC_DAYS : CACHE_EXPIRY_DAYS;
   const expiry = now + (days * 24 * 60 * 60 * 1000);
   locationCache.set(username, { location, expiry });
   hasUnsavedChanges = true; 
+  
   if (locationCache.size > MAX_CACHE_SIZE + 100) cleanCache();
-  if (!saveCache.timeout) {
-    saveCache.timeout = setTimeout(async () => {
-      await saveCache();
-      saveCache.timeout = null;
-    }, 2000);
-  }
+  
+  if (saveCacheTimeout) clearTimeout(saveCacheTimeout);
+  saveCacheTimeout = setTimeout(saveCache, 2000);
 }
 
 function cleanCache() {
@@ -228,7 +253,7 @@ function cleanCache() {
 
 window.addEventListener('pagehide', () => {
   if (hasUnsavedChanges) {
-    clearTimeout(saveCache.timeout);
+    if (saveCacheTimeout) clearTimeout(saveCacheTimeout);
     saveCache(); 
   }
   flushWriteBuffer();
@@ -236,7 +261,7 @@ window.addEventListener('pagehide', () => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && hasUnsavedChanges) {
-    clearTimeout(saveCache.timeout);
+    if (saveCacheTimeout) clearTimeout(saveCacheTimeout);
     saveCache();
   }
 });
@@ -244,11 +269,13 @@ document.addEventListener('visibilitychange', () => {
 function injectPageScript() {
   const script = document.createElement('script');
   script.src = chrome.runtime.getURL('pageScript.js');
+  script.setAttribute('data-extension-id', chrome.runtime.id); 
   script.onload = function() { this.remove(); };
   (document.head || document.documentElement).appendChild(script);
   
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
+    if (!event.data || event.data.target !== 'contentScript') return;
     if (event.data && event.data.type === '__rateLimitInfo') {
       rateLimitResetTime = event.data.resetTime;
     }
@@ -271,8 +298,8 @@ async function fetchFromCloud(usernames) {
 // BATCH WRITE OPTIMIZATION
 let writeBuffer = [];
 let writeTimer = null;
-const BATCH_SIZE = 25;
-const BATCH_DELAY = 30000; // 30 seconds
+const BATCH_SIZE = 50; // Optimized for D1 Worker Limit
+const BATCH_DELAY = 30000;
 
 function flushWriteBuffer() {
   if (writeTimer) {
@@ -283,14 +310,13 @@ function flushWriteBuffer() {
   if (writeBuffer.length === 0) return;
   
   const batch = [...writeBuffer];
-  writeBuffer = []; // Clear buffer immediately to prevent duplicates
+  writeBuffer = []; 
 
-  // NOTE: Worker must be updated to handle a JSON Array of objects
   fetch(`${CLOUD_API_URL}/submit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(batch),
-    keepalive: true // Ensures request completes even if tab closes
+    keepalive: true
   }).catch(() => {});
 }
 
@@ -298,15 +324,11 @@ function submitToCloud(username, location) {
   if (submittedSessionCache.has(username)) return;
   if (!location) return;
 
-  // 1. Strict Deduplication: If we've ever submitted this user, don't do it again.
   if (submissionHistory.has(username)) return;
 
-  // 2. Cache Check: If the Cloud/Cache already knows this location, don't submit.
   if (locationCache.has(username)) {
     const cached = locationCache.get(username);
-    // If our scraped location matches the cached location, it's redundant.
     if (cached.location === location) {
-      // Mark as submitted so we don't check again this session
       submittedSessionCache.add(username);
       return;
     }
@@ -315,7 +337,6 @@ function submitToCloud(username, location) {
   submittedSessionCache.add(username);
   submissionHistory.add(username);
   
-  // Prune history if too large (keep recent 2000 submissions)
   if (submissionHistory.size > 2000) {
     const it = submissionHistory.values();
     for (let i = 0; i < 500; i++) {
@@ -323,7 +344,7 @@ function submitToCloud(username, location) {
     }
   }
   
-  // Persist history asynchronously
+  // Debounced save for history
   storageSet({ [SUBMISSION_HISTORY_KEY]: Array.from(submissionHistory) });
 
   writeBuffer.push({ username, location });
@@ -339,10 +360,13 @@ function submitToCloud(username, location) {
 
 async function processCloudQueue() {
   if (isProcessingCloud || cloudQueue.length === 0) return;
+  if (isContextInvalid()) return;
+  
   isProcessingCloud = true;
 
   const requestBatch = [];
-  while (cloudQueue.length > 0 && requestBatch.length < 20) {
+  // Increased batch size to 50 for Cloudflare D1 optimization
+  while (cloudQueue.length > 0 && requestBatch.length < 50) {
     requestBatch.push(cloudQueue.shift());
   }
 
@@ -394,6 +418,7 @@ async function processCloudQueue() {
 
 async function processTwitterQueue() {
   if (isProcessingTwitter || twitterQueue.length === 0) return;
+  if (isContextInvalid()) return;
   
   const currentTimeSeconds = Math.floor(Date.now() / 1000);
   if (rateLimitResetTime > currentTimeSeconds) {
@@ -436,6 +461,7 @@ function makeLocationRequest(screenName) {
     
     const locationResponseHandler = (event) => {
       if (event.source !== window) return;
+      if (!event.data || event.data.target !== 'contentScript') return;
       
       if (event.data && 
           event.data.type === '__locationResponse' &&
@@ -452,7 +478,7 @@ function makeLocationRequest(screenName) {
       }
     };
     window.addEventListener('message', locationResponseHandler);
-    window.postMessage({ type: '__fetchLocation', screenName, requestId: uniqueRequestId }, '*');
+    window.postMessage({ type: '__fetchLocation', screenName, requestId: uniqueRequestId, target: 'pageScript' }, '*');
     
     setTimeout(() => {
       window.removeEventListener('message', locationResponseHandler);
@@ -513,13 +539,6 @@ function extractUsername(element) {
     }
   }
   return null;
-}
-
-function findHandleSection(container, screenName) {
-  return Array.from(container.querySelectorAll('div')).find(div => {
-    const link = div.querySelector(`a[href="/${screenName}"]`);
-    return link && link.textContent?.trim() === `@${screenName}`;
-  });
 }
 
 function checkAndHideTweet(usernameElement, locationStr) {
@@ -584,27 +603,37 @@ async function addFlagToUsername(usernameElement, screenName) {
     const containerForFlag = usernameElement.querySelector('[data-testid="UserName"], [data-testid="User-Name"]');
     if (!containerForFlag) return;
     
-    const existingFlag = containerForFlag.querySelector('[data-twitter-flag]');
-    if (existingFlag) {
+    if (containerForFlag.querySelector('[data-twitter-flag]')) {
        usernameElement.dataset.flagAdded = 'true';
        return;
     }
 
     const flagSpan = document.createElement('span');
+    flagSpan.className = 'tf-flag'; // Use injected CSS class
     flagSpan.setAttribute('data-twitter-flag', 'true');
-    flagSpan.style.cssText = 'contain:layout style;margin:0 4px;display:inline-flex;align-items:center;vertical-align:middle;';
     flagSpan.title = location; 
     
     const flagImg = document.createElement('img');
     flagImg.src = getTwemojiUrl(flagEmoji);
     flagImg.alt = flagEmoji;
     flagImg.title = location;
-    flagImg.style.height = '1.2em';
-    flagImg.style.width = 'auto';
-    flagImg.style.display = 'block';
     
     flagSpan.appendChild(flagImg);
-    containerForFlag.appendChild(flagSpan);
+
+    // Locate the specific handle element (leaf node) to append the flag next to it
+    // This fixes the issue where the flag appears on a new line in post details
+    let targetContainer = containerForFlag;
+    const handleText = `@${screenName.toLowerCase()}`;
+    const leafNodes = containerForFlag.querySelectorAll('*');
+    
+    for (const node of leafNodes) {
+      if (node.children.length === 0 && node.textContent.toLowerCase().includes(handleText)) {
+        if (node.parentElement) targetContainer = node.parentElement;
+        break;
+      }
+    }
+    
+    targetContainer.appendChild(flagSpan);
     usernameElement.dataset.flagAdded = 'true';
 
   } catch (error) {
@@ -630,8 +659,7 @@ function observeNode(node) {
 }
 
 async function processUsernames() {
-  if (!extensionEnabled) return;
-  // Use a targeted selector for un-observed nodes to minimize loop overhead
+  if (!extensionEnabled || isContextInvalid()) return;
   const containers = document.querySelectorAll(`${TARGET_SELECTORS}:not([data-observing="true"])`);
   for (let i = 0; i < containers.length; i++) {
     observeNode(containers[i]);
@@ -650,11 +678,9 @@ function initObserver() {
         const node = addedNodes[j];
         if (node.nodeType !== 1) continue;
 
-        // Targeted check for the specific containers we care about
         if (node.matches(TARGET_SELECTORS)) {
           observeNode(node);
         } else {
-          // Only query the subtree of the newly added node
           const children = node.querySelectorAll(TARGET_SELECTORS);
           for (let k = 0; k < children.length; k++) {
             observeNode(children[k]);
@@ -676,7 +702,8 @@ async function init() {
   
   if (!extensionEnabled) return;
   
-  // Add preconnection to speed up initial network handshake
+  injectStyles();
+  
   const link = document.createElement('link');
   link.rel = 'preconnect';
   link.href = CLOUD_API_URL;
@@ -684,7 +711,42 @@ async function init() {
 
   injectPageScript();
   
-  // Process initial set immediately without 2s delay
+  // Wait a bit for Twitter to make some API calls first
+  setTimeout(() => {
+    if (!headersReady) {
+      // Proactive Fallback: Construct valid headers from cookies if interception timed out
+      // This ensures API calls work immediately even if the user is idle on load
+      const getCookie = (name) => {
+        const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        return match ? match[2] : null;
+      };
+      
+      const csrfToken = getCookie('ct0');
+      // Standard Twitter Web Client Bearer Token (Static)
+      const PUBLIC_BEARER = 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+
+      if (csrfToken) {
+        twitterHeaders = {
+          'authorization': PUBLIC_BEARER,
+          'x-csrf-token': csrfToken,
+          'x-twitter-active-user': 'yes',
+          'x-twitter-auth-type': 'OAuth2Session',
+          'x-twitter-client-language': 'en',
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        };
+        headersReady = true;
+      } else {
+        // Minimal fallback (will likely fail auth-gated endpoints but prevents crash)
+        twitterHeaders = {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        };
+        headersReady = true;
+      }
+    }
+  }, 3000);
+
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
     processUsernames();
   } else {
@@ -697,13 +759,10 @@ async function init() {
   const navObserver = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      // Debounce slightly for DOM stability, but much faster than 2s
       setTimeout(processUsernames, 100);
     }
   });
   navObserver.observe(document.head, { subtree: true, childList: true });
-  
-  setInterval(saveCache, 30000);
 }
 
 if (document.readyState === 'loading') {
