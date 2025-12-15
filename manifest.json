@@ -27,7 +27,9 @@
   },
   "host_permissions": [
     "https://x.com/*",
-    "https://twitter.com/*"
+    "https://twitter.com/*",
+    "https://twitter-countries-api.tnemoroccan.workers.dev/*",
+    "https://raw.githubusercontent.com/*"
   ],
   "content_scripts": [
     {
