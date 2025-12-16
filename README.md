@@ -4,6 +4,16 @@ A browser extension that displays the country flag of X.com (Twitter) users next
 
 > **Enjoying the extension?** Please consider dropping a **Star ⭐** on this repository to show your support! It helps visibility a ton.
 
+## 🚀 v1.1.0 Update Highlights
+
+This release brings massive backend performance upgrades and quality-of-life improvements:
+
+*   **Backend Overhaul:** Migrated the community database to **Cloudflare D1 (SQL)** for significantly faster lookups and better scalability.
+*   **Network Optimization:** Implemented **Request Batching**. Data submissions are now buffered and sent in groups of 50, drastically reducing network traffic.
+*   **Searchable Blocker:** Added a **search bar** to the dropdown menu, making it easier to find and block specific countries.
+*   **Stability:** Added **Dynamic GraphQL Sniffing**. The extension now auto-detects API changes on X.com, making it much more resilient to breaking changes.
+*   **Smart Caching:** Introduced a "Stale-While-Revalidate" strategy—cached flags load instantly while fresh data is fetched silently in the background.
+
 ##  Key Features
 
 ### 🌎 Country Flags
