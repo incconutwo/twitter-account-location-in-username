@@ -4,15 +4,15 @@ A browser extension that displays the country flag of X.com (Twitter) users next
 
 > **Enjoying the extension?** Please consider dropping a **Star ⭐** on this repository to show your support! It helps visibility a ton.
 
-## 🚀 v1.1.0 Update Highlights
+## 🚀 v1.1.1 Update Highlights
 
-This release brings massive backend performance upgrades and quality-of-life improvements:
+This release focuses on user experience improvements and community engagement:
 
-*   **Backend Overhaul:** Migrated the community database to **Cloudflare D1 (SQL)** for significantly faster lookups and better scalability.
-*   **Network Optimization:** Implemented **Request Batching**. Data submissions are now buffered and sent in groups of 50, drastically reducing network traffic.
-*   **Searchable Blocker:** Added a **search bar** to the dropdown menu, making it easier to find and block specific countries.
-*   **Stability:** Added **Dynamic GraphQL Sniffing**. The extension now auto-detects API changes on X.com, making it much more resilient to breaking changes.
-*   **Smart Caching:** Introduced a "Stale-While-Revalidate" strategy—cached flags load instantly while fresh data is fetched silently in the background.
+*   **Verified-Only Filtering:** A new toggle in the popup allows users to exclusively filter posts from verified accounts based on country. This provides more granular control over content visibility.
+*   **Auto-Block Feature:** Introduces an "Auto-Block" option that permanently blocks Twitter accounts matching the selected country filters. This feature includes a prominent confirmation modal to prevent accidental activation, emphasizing its irreversible nature.
+*   **Enhanced User Data Fetching:** The `pageScript.js` now fetches both the user's location and their verified status (`is_blue_verified`) from Twitter's API, enabling the new verified-only filtering.
+*   **New Welcome Modal:** A first-time user experience modal has been added to onboard new users, highlighting key features like country flags, filtering, and verified-only mode.
+*   **Priority Feedback System:** Integrated a "priority feedback" system via donations on Ko-fi. Users can include a ticket ID (generated after sending feedback) in their donation message to potentially expedite their request.
 
 ##  Key Features
 
