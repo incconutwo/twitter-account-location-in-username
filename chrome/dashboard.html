@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feed Geography Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="dashboard-header">
+    <div class="header-content">
+      <div class="header-left">
+        <span class="header-icon">🌍</span>
+        <div class="header-text">
+          <h1>Feed Geography</h1>
+          <p class="header-subtitle">Your Twitter Timeline Around the World</p>
+        </div>
+      </div>
+      <div class="header-stats">
+        <div class="header-stat">
+          <span class="header-stat-value" id="totalUsers">0</span>
+          <span class="header-stat-label">Users Scanned</span>
+        </div>
+        <div class="header-stat">
+          <span class="header-stat-value" id="totalCountries">0</span>
+          <span class="header-stat-label">Countries</span>
+        </div>
+        <div class="header-stat">
+           <button id="shareBtn" class="share-btn">Share on X 🐦</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="dashboard-main">
+    <!-- World Map Section -->
+    <section class="map-section">
+      <div class="map-container" id="mapContainer">
+        <!-- SVG Map will be loaded here -->
+        <div class="map-loading" id="mapLoading">
+          <div class="loading-spinner"></div>
+          <span>Loading map...</span>
+        </div>
+      </div>
+      
+      <!-- Map Tooltip -->
+      <div class="map-tooltip" id="mapTooltip" hidden>
+        <div class="tooltip-content">
+          <span class="tooltip-flag" id="tooltipFlag"></span>
+          <span class="tooltip-country" id="tooltipCountry"></span>
+          <span class="tooltip-count" id="tooltipCount"></span>
+        </div>
+      </div>
+      
+      <!-- Heat Map Legend -->
+      <div class="map-legend">
+        <div class="legend-colors">
+          <span class="legend-label">Fewer users</span>
+          <div class="legend-gradient"></div>
+          <span class="legend-label">More users</span>
+        </div>
+        <p class="legend-hint">Hover over colored countries to see user counts</p>
+      </div>
+    </section>
+
+    <!-- Sidebar: Top Countries -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title-group">
+          <h2>Top Countries</h2>
+          <span class="sidebar-subtitle">on your feed</span>
+        </div>
+        <button id="resetBtn" class="reset-btn" title="Clear all spotted locations">Reset Data</button>
+      </div>
+      
+      <div class="country-list" id="countryList">
+        <!-- Countries will be populated by JS -->
+      </div>
+      
+      <!-- Empty State -->
+      <div class="empty-state" id="emptyState" hidden>
+        <div class="empty-icon">📭</div>
+        <h3>No data yet</h3>
+        <p>Browse your Twitter feed to start tracking countries.</p>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Footer -->
+  <footer class="dashboard-footer">
+    <p>Data collected locally • <a href="https://github.com/incconutwo/twitter-account-location-in-username" target="_blank">⭐ Star on GitHub</a></p>
+  </footer>
+
+  <!-- Reset Confirmation Modal -->
+  <div id="resetModal" class="modal-overlay" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-icon">⚠️</div>
+        <h2>Reset All Data?</h2>
+      </div>
+      <div class="modal-body">
+        <p>This will permanently clear all your spotted locations, scanned counts, and map data. This action cannot be undone.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelReset" class="btn-secondary">Cancel</button>
+        <button id="confirmReset" class="btn-danger">Clear Everything</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="countryFlags.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

@@ -27,6 +27,11 @@ let isProcessingCloud = false;
 let isProcessingTwitter = false;
 let rateLimitResetTime = 0;
 
+// Stats tracking
+let stats = { hiddenPosts: 0, blockedAccounts: 0, seenCountries: {}, totalScanned: 0 };
+const STATS_KEY = 'extension_stats';
+let statsTimer = null;
+
 // Observers
 let observer = null;
 const processingUsernames = new Set();
@@ -59,25 +64,80 @@ const storage = {
   })
 };
 
-function getTwemojiUrl(emoji) {
-  const hex = Array.from(emoji).map(c => c.codePointAt(0).toString(16)).join('-');
-  return `https://abs-0.twimg.com/emoji/v2/svg/${hex}.svg`;
-}
+// getTwemojiUrl is now in countryFlags.js with pre-cached URLs
 
 // --- Init & Settings ---
 
 async function loadSettings() {
   try {
-    const res = await storage.get(['extension_enabled', 'blocked_countries', 'submission_history', 'verified_only_mode', 'auto_block_mode']);
+    const res = await storage.get(['extension_enabled', 'blocked_countries', 'submission_history', 'verified_only_mode', 'auto_block_mode', STATS_KEY]);
     extensionEnabled = res.extension_enabled ?? true;
     submissionHistory = new Set(res.submission_history || []);
     verifiedOnlyMode = res.verified_only_mode ?? false;
     autoBlockMode = res.auto_block_mode ?? false;
+    const rawStats = res[STATS_KEY] || {};
+    stats = {
+      hiddenPosts: rawStats.hiddenPosts || 0,
+      blockedAccounts: rawStats.blockedAccounts || 0,
+      seenCountries: rawStats.seenCountries || {},
+      totalScanned: rawStats.totalScanned || 0
+    };
     
     if (res.blocked_countries) {
       updateBlockedCountries(res.blocked_countries);
     }
   } catch (e) {}
+}
+
+function incrementStat(type) {
+  if (type === 'hidden') stats.hiddenPosts++;
+  else if (type === 'blocked') stats.blockedAccounts++;
+  storage.set({ [STATS_KEY]: stats });
+}
+
+function trackCountry(location) {
+  if (!location || typeof COUNTRY_FLAGS === 'undefined') return;
+  
+  // Find the country name from location string using existing lookup
+  let countryName = null;
+  const normalizedLower = location.trim().toLowerCase();
+  
+  // Check exact match first
+  for (const [name, flag] of Object.entries(COUNTRY_FLAGS)) {
+    if (name.toLowerCase() === normalizedLower) {
+      countryName = name;
+      break;
+    }
+  }
+  
+  // If no exact match, find country in location string
+  if (!countryName) {
+    for (const name of Object.keys(COUNTRY_FLAGS).sort((a, b) => b.length - a.length)) {
+      const lower = name.toLowerCase();
+      const idx = normalizedLower.indexOf(lower);
+      if (idx !== -1) {
+        const before = normalizedLower[idx - 1];
+        const after = normalizedLower[idx + lower.length];
+        if ((!before || before === ' ' || before === ',') && 
+            (!after || after === ' ' || after === ',')) {
+          countryName = name;
+          break;
+        }
+      }
+    }
+  }
+  
+  if (!countryName) return;
+  
+  // Update frequency map
+  stats.seenCountries[countryName] = (stats.seenCountries[countryName] || 0) + 1;
+  stats.totalScanned++;
+  
+  // Debounced save to avoid excessive writes
+  if (statsTimer) clearTimeout(statsTimer);
+  statsTimer = setTimeout(() => {
+    storage.set({ [STATS_KEY]: stats });
+  }, 2000);
 }
 
 function updateBlockedCountries(input) {
@@ -241,7 +301,7 @@ async function processCloudQueue() {
   }
 
   isProcessingCloud = false;
-  if (cloudQueue.length > 0) setTimeout(processCloudQueue, 50);
+  if (cloudQueue.length > 0) queueMicrotask(processCloudQueue); // Immediate (was 50ms)
 }
 
 async function processTwitterQueue() {
@@ -254,32 +314,47 @@ async function processTwitterQueue() {
   }
 
   isProcessingTwitter = true;
-  const req = twitterQueue.shift();
-  if (!req) { isProcessingTwitter = false; return; }
+  
+  // Process up to 3 users in parallel (was 1)
+  const PARALLEL_LIMIT = 3;
+  const batch = [];
+  while (twitterQueue.length > 0 && batch.length < PARALLEL_LIMIT) {
+    batch.push(twitterQueue.shift());
+  }
+  
+  if (batch.length === 0) { isProcessingTwitter = false; return; }
+
+  // Helper function to fetch single user
+  const fetchUser = (req) => new Promise((resolve) => {
+    const id = Date.now() + Math.random();
+    const handler = (e) => {
+      if (e.source !== window || !e.data || e.data.type !== '__userDataResponse' || e.data.requestId !== id) return;
+      window.removeEventListener('message', handler);
+      if (!e.data.isRateLimited) {
+        saveCacheEntry(req.screenName, e.data.location, e.data.verified);
+      }
+      const userData = { location: e.data.location, verified: e.data.verified ?? false };
+      req.resolve(userData);
+      queuedUsernames.delete(req.screenName);
+      if (userData.location) submitToCloud(req.screenName, userData.location, userData.verified);
+      resolve();
+    };
+    window.addEventListener('message', handler);
+    window.postMessage({ type: '__fetchUserData', screenName: req.screenName, requestId: id, target: 'pageScript' }, '*');
+    setTimeout(() => { 
+      window.removeEventListener('message', handler); 
+      req.resolve({ location: null, verified: false }); 
+      resolve(); 
+    }, 5000); // Reduced from 10s to 5s
+  });
 
   try {
-    const userData = await new Promise((resolve) => {
-      const id = Date.now() + Math.random();
-      const handler = (e) => {
-        if (e.source !== window || !e.data || e.data.type !== '__userDataResponse' || e.data.requestId !== id) return;
-        window.removeEventListener('message', handler);
-        if (!e.data.isRateLimited) {
-          saveCacheEntry(req.screenName, e.data.location, e.data.verified);
-        }
-        resolve({ location: e.data.location, verified: e.data.verified ?? false });
-      };
-      window.addEventListener('message', handler);
-      window.postMessage({ type: '__fetchUserData', screenName: req.screenName, requestId: id, target: 'pageScript' }, '*');
-      setTimeout(() => { window.removeEventListener('message', handler); resolve({ location: null, verified: false }); }, 10000);
-    });
-
-    req.resolve(userData);
-    queuedUsernames.delete(req.screenName);
-    if (userData.location) submitToCloud(req.screenName, userData.location, userData.verified);
+    // Process batch in parallel
+    await Promise.all(batch.map(fetchUser));
     
-    setTimeout(() => { isProcessingTwitter = false; processTwitterQueue(); }, 1500);
+    // 500ms delay between batches (was 1500ms per user)
+    setTimeout(() => { isProcessingTwitter = false; processTwitterQueue(); }, 500);
   } catch (e) {
-    req.reject(e);
     isProcessingTwitter = false;
     processTwitterQueue();
   }
@@ -299,7 +374,7 @@ async function getUserData(screenName) {
   return new Promise((resolve, reject) => {
     queuedUsernames.add(screenName);
     cloudQueue.push({ screenName, resolve, reject });
-    if (!isProcessingCloud) setTimeout(processCloudQueue, 100);
+    if (!isProcessingCloud) setTimeout(processCloudQueue, 16); // Reduced from 100ms
   });
 }
 
@@ -338,10 +413,12 @@ async function addFlagToUsername(container, screenName) {
           article.style.display = 'none';
           article.dataset.locationHidden = 'true';
           container.dataset.flagAdded = 'true';
+          incrementStat('hidden'); // Track hidden posts
           
           // If auto-block is enabled, send block request
           if (autoBlockMode) {
             window.postMessage({ type: '__blockUser', screenName, target: 'pageScript' }, '*');
+            incrementStat('blocked'); // Track blocked accounts
           }
           return;
         }
@@ -353,6 +430,15 @@ async function addFlagToUsername(container, screenName) {
       container.dataset.flagAdded = 'failed';
       return;
     }
+    
+    
+    // Track this country for the dashboard (non-blocking)
+    try {
+      trackCountry(location);
+    } catch (e) {
+      // Silently fail - tracking shouldn't break flag display
+    }
+
 
     const nameNode = container.querySelector('[data-testid="User-Name"]');
     if (nameNode && !nameNode.querySelector('.tf-flag')) {
@@ -426,7 +512,15 @@ async function init() {
   script.onload = () => script.remove();
   (document.head || document.documentElement).appendChild(script);
 
-  observer = new MutationObserver(scan);
+  // Debounced MutationObserver to prevent excessive scan() calls during rapid scrolling
+  let scanTimer = null;
+  observer = new MutationObserver(() => {
+    if (scanTimer) return;
+    scanTimer = requestAnimationFrame(() => {
+      scan();
+      scanTimer = null;
+    });
+  });
   observer.observe(document.body, { childList: true, subtree: true });
   
   window.addEventListener('message', (e) => {

@@ -121,8 +121,11 @@
           const data = await response.json();
           const userResult = data?.data?.user_result_by_screen_name?.result;
           const location = userResult?.about_profile?.account_based_in || null;
-          // Check for blue checkmark (is_blue_verified)
-          const verified = userResult?.is_blue_verified === true;
+          // Check multiple verified fields - Twitter may use different ones
+          const verified = userResult?.is_blue_verified === true || 
+                           userResult?.verified === true ||
+                           userResult?.legacy?.verified === true ||
+                           userResult?.legacy?.is_blue_verified === true;
           sendToContent('__userDataResponse', { screenName, location, verified, requestId });
         } else {
           if (response.status === 429) {

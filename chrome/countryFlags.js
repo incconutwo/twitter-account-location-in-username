@@ -269,35 +269,52 @@ const COUNTRY_FLAGS = {
   "International": "🌐"
 };
 
+// --- Performance Optimizations: Pre-computed at load time ---
+
+// O(1) lowercase lookup map
+const COUNTRY_FLAGS_LOWER = new Map(
+  Object.entries(COUNTRY_FLAGS).map(([k, v]) => [k.toLowerCase(), v])
+);
+
+// Pre-sorted by length (longest first) for substring matching
+const SORTED_COUNTRIES = Object.keys(COUNTRY_FLAGS)
+  .sort((a, b) => b.length - a.length)
+  .map(c => ({ name: c, lower: c.toLowerCase(), flag: COUNTRY_FLAGS[c] }));
+
+// Pre-cached Twemoji URLs
+const TWEMOJI_URLS = new Map();
+for (const emoji of Object.values(COUNTRY_FLAGS)) {
+  if (!TWEMOJI_URLS.has(emoji)) {
+    const hex = Array.from(emoji).map(c => c.codePointAt(0).toString(16)).join('-');
+    TWEMOJI_URLS.set(emoji, `https://abs-0.twimg.com/emoji/v2/svg/${hex}.svg`);
+  }
+}
+
+function getTwemojiUrl(emoji) {
+  return TWEMOJI_URLS.get(emoji) || null;
+}
+
 function getCountryFlag(countryName) {
   if (!countryName) return null;
   
-  // 1. Try exact match first
-  if (COUNTRY_FLAGS[countryName]) {
-    return COUNTRY_FLAGS[countryName];
-  }
-  
-  // 2. Try case-insensitive match
   const normalized = countryName.trim();
   const normalizedLower = normalized.toLowerCase();
   
-  for (const [country, flag] of Object.entries(COUNTRY_FLAGS)) {
-    if (country.toLowerCase() === normalizedLower) {
-      return flag;
-    }
+  // 1. O(1) exact match (most common case)
+  if (COUNTRY_FLAGS_LOWER.has(normalizedLower)) {
+    return COUNTRY_FLAGS_LOWER.get(normalizedLower);
   }
   
-  // 3. Try to find country INSIDE the location string (e.g. "Paris, France" -> "France")
-  // Sort countries by length (descending) so "South Africa" matches before "Africa"
-  const sortedCountries = Object.keys(COUNTRY_FLAGS).sort((a, b) => b.length - a.length);
-  
-  for (const country of sortedCountries) {
-    if (normalizedLower.includes(country.toLowerCase())) {
-      // Avoid false positives where a country name is part of a word (e.g. "Mali" in "Malibu")
-      // Simple boundary check
-      const regex = new RegExp(`(^|\\s|,)` + country.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + `($|\\s|,)`, 'i');
-      if (regex.test(normalized)) {
-        return COUNTRY_FLAGS[country];
+  // 2. Substring match using pre-sorted list (e.g. "Paris, France" -> France)
+  for (const { name, lower, flag } of SORTED_COUNTRIES) {
+    const idx = normalizedLower.indexOf(lower);
+    if (idx !== -1) {
+      // Word boundary check without regex (faster)
+      const before = normalizedLower[idx - 1];
+      const after = normalizedLower[idx + lower.length];
+      if ((!before || before === ' ' || before === ',') && 
+          (!after || after === ' ' || after === ',')) {
+        return flag;
       }
     }
   }

@@ -8,6 +8,7 @@ const DEFAULT_ENABLED = true;
 const REPO_URL = 'https://github.com/incconutwo/twitter-account-location-in-username';
 const API_URL = 'https://twitter-countries-api.tnemoroccan.workers.dev';
 const DEBUG_STORAGE_KEY = 'debug_mode_enabled';
+const STATS_KEY = 'extension_stats';
 
 // DOM Elements - initialized after DOMContentLoaded
 let els = {};
@@ -560,7 +561,7 @@ function init() {
     return;
   }
 
-  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY], (res) => {
+  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, STATS_KEY], (res) => {
     // 1. Setup State
     const isEnabled = res[TOGGLE_KEY] !== undefined ? res[TOGGLE_KEY] : DEFAULT_ENABLED;
     updateToggle(isEnabled);
@@ -571,6 +572,18 @@ function init() {
     // Setup new toggles
     if (res[VERIFIED_ONLY_KEY]) els.verifiedOnly.classList.add('enabled');
     if (res[AUTO_BLOCK_KEY]) els.autoBlock.classList.add('enabled');
+    
+    // Load stats with backward compatibility
+    const stats = {
+      hiddenPosts: 0,
+      blockedAccounts: 0,
+      seenCountries: {},
+      totalScanned: 0,
+      ...(res[STATS_KEY] || {})
+    };
+    document.getElementById('hiddenPostsCount').textContent = stats.hiddenPosts.toLocaleString();
+    document.getElementById('blockedAccountsCount').textContent = stats.blockedAccounts.toLocaleString();
+    document.getElementById('totalScannedCount').textContent = stats.totalScanned.toLocaleString();
     
     if (res[DEBUG_STORAGE_KEY]) renderDebugUI();
     
@@ -611,6 +624,14 @@ function init() {
 
     window.addEventListener('click', () => els.select.classList.remove('open'));
     
+    // Dashboard button handler
+    const dashboardBtn = document.getElementById('openDashboard');
+    if (dashboardBtn) {
+      dashboardBtn.addEventListener('click', () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+      });
+    }
+    
     const headerTitle = document.querySelector('h1');
     if (headerTitle) {
       headerTitle.addEventListener('click', (e) => {
@@ -628,6 +649,7 @@ function init() {
       initUpdateCheck();
       initFeedbackUI();
       initWelcomeScreen();
+      initKofiModal();
     }, 50);
   });
 }
@@ -802,6 +824,31 @@ function initFeedbackUI() {
     } finally {
       sendFeedback.disabled = false;
       sendFeedback.textContent = 'Send Feedback';
+    }
+  });
+}
+
+
+// --- Ko-fi Modal ---
+function initKofiModal() {
+  const kofiTrigger = document.getElementById('kofiTrigger');
+  const kofiModal = document.getElementById('kofiModal');
+  const closeKofiModal = document.getElementById('closeKofiModal');
+
+  if (!kofiTrigger || !kofiModal || !closeKofiModal) return;
+
+  kofiTrigger.addEventListener('click', () => {
+    kofiModal.hidden = false;
+  });
+
+  closeKofiModal.addEventListener('click', () => {
+    kofiModal.hidden = true;
+  });
+
+  // Close modal when clicking outside the content
+  kofiModal.addEventListener('click', (e) => {
+    if (e.target === kofiModal) {
+      kofiModal.hidden = true;
     }
   });
 }
