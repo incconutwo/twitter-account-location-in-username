@@ -4,6 +4,39 @@ A browser extension that displays the country flag of X.com (Twitter) users next
 
 > **Enjoying the extension?** Please consider dropping a **Star ⭐** on this repository to show your support! It helps visibility a ton.
 
+# 🚀 Changelog: Version 1.2.0
+
+**Name Change:** The extension has been renamed to **"X Location, Local Time & Country Blocker"** to reflect the powerful new features introduced in this release.
+
+### ✨ Major New Features
+
+*   🌍 **Feed Geography Dashboard**: A brand-new, dedicated dashboard page! Track the global reach of your timeline with an interactive world heatmap. 
+    *   Shows total users scanned, unique countries discovered, and a ranked list of your top countries.
+    *   Hover over the map to see user counts per country.
+    *   Includes a "Share on X" button to post your timeline's geography stats.
+*   🕒 **Local Time Indicator**: Usernames now display the account's local time next to their country flag! 
+    *   Includes a dynamic 🌙 icon to indicate when it's nighttime (10 PM - 6 AM) for the user.
+    *   Powered by a comprehensive, offline timezone resolution engine covering major cities, US states, and country defaults.
+*   🛂 **Discovery Notifications (Passport Mode)**: A sleek, animated toast notification now pops up in the corner of your screen whenever you spot a user from a country you haven't seen before. Tracks your progress out of 195 countries! *(Can be toggled off in settings).*
+*   📊 **Quick Stats Preview**: The extension popup now displays live statistics for your session, including total scanned accounts, total hidden posts, and total blocked accounts.
+*   ⚠️ **Approximate Location Warning**: If a user's location is broad/regional rather than exact, a small ⚠️ icon now appears next to the flag.
+*   💬 **Custom Tooltips**: Replaced default browser tooltips with a custom, snappy tooltip component that displays the user's full location string, resolved timezone, and exact local time.
+
+### ⚡ Performance & Core Architectural Upgrades
+
+*   🕵️ **Passive Data Snooping (Zero Network Overhead)**: A massive architectural improvement. The extension now intercepts and recursively parses Twitter's native timeline payload as it loads. If Twitter's initial load already contains the user's location, the extension grabs it instantly without making *any* background API calls. This drastically speeds up flag rendering and effectively eliminates Twitter rate limiting for most users.
+*   🛡️ **Dynamic GraphQL Query Discovery**: Twitter frequently changes their internal API Query IDs, which previously broke the extension. The injected script now dynamically scans Twitter's loaded JavaScript bundles to find the active `AboutAccountQuery` ID, ensuring the extension stays functional through Twitter updates.
+*   ⏱️ **Scroll Debounce & Lazy Fetching**: Implemented an `IntersectionObserver` with a 150ms debounce. If you scroll past a tweet too quickly, the extension ignores it, saving CPU cycles and network requests.
+*   🚀 **Pre-computed O(1) Lookups**: Rebuilt the `countryFlags.js` matching engine. Replaced repetitive array sorting and regex checks with pre-cached Twemoji maps and O(1) lowercase lookup dictionaries.
+*   ⏱️ **Micro-Batched DOM Updates**: The `MutationObserver` now micro-batches UI updates on a 60ms interval, ensuring buttery-smooth scrolling even on heavy timelines.
+
+### 🛠️ UI/UX & Developer Improvements
+
+*   **Expanded Country/Alias Dictionary**: Added robust support for native language names (e.g., *Deutschland, Polska, España*), modern aliases (*Czechia, Eswatini*), and US State abbreviations for much higher flag match rates.
+*   **Centralized Settings Manager**: Settings are now managed centrally in `background.js` and broadcasted live to all open Twitter tabs, ensuring instant UI updates without needing to refresh the page.
+*   **Enhanced Developer Mode**: The debug menu in the popup now includes a "Data Source" dropdown, allowing developers to force location lookups to use "Cache Only", "Cloudflare API Only", "Twitter API Only", or "Auto". Added a button to test the Welcome screen.
+*   **Faster Init**: Cookie-based authentication interception now initializes in 500ms (down from 3000ms), catching early timeline loads much faster.
+
 ## 🚀 v1.1.1 Update Highlights
 
 This release focuses on user experience improvements and community engagement:
