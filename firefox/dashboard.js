@@ -51,7 +51,7 @@ function formatCount(num) {
 async function loadAndRenderMap(countryCounts) {
   try {
     // Load SVG map from local file
-    const res = await fetch(chrome.runtime.getURL('world-map.svg'));
+    const res = await fetch(browser.runtime.getURL('world-map.svg'));
     if (!res.ok) throw new Error('Failed to load map');
     
     const svgText = await res.text();
@@ -206,7 +206,7 @@ function setupShareButton(totalScanned, countryArray, totalCountries) {
   btn.addEventListener('click', () => {
     const top3 = countryArray.slice(0, 3).map((c, i) => `${i+1}. ${c.flag} ${c.country}: ${formatCount(c.count)}`).join('\n');
     
-    const text = `My X Feed Geography 🌍\nI've spotted users from ${totalCountries} countries on my feed so far!\n\nTop locations:\n${top3}\n\nTrack yours: https://chromewebstore.google.com/detail/xtwitter-country-flags-bl/dgodabjkaifjlhpcapiohikkklnailla\n\n#TwitterGeography #OpenSource`;
+    const text = `My Twitter Feed Geography 🌍\nI've spotted users from ${totalCountries} countries on my feed so far!\n\nTop locations:\n${top3}\n\nTrack yours: https://github.com/incconutwo/twitter-account-location-in-username\n\n#TwitterGeography #OpenSource`;
     
     const url = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text);
     const width = 600;
@@ -231,7 +231,7 @@ function setupResetButton() {
   });
 
   els.confirmResetBtn.addEventListener('click', () => {
-    chrome.storage.local.set({ [STATS_KEY]: { seenCountries: {}, totalScanned: 0 } }, () => {
+    browser.storage.local.set({ [STATS_KEY]: { seenCountries: {}, totalScanned: 0 } }, () => {
       window.location.reload();
     });
   });
@@ -244,7 +244,7 @@ function setupResetButton() {
 
 async function init() {
   // Load data
-  const res = await chrome.storage.local.get(STATS_KEY);
+  const res = await browser.storage.local.get(STATS_KEY);
   const stats = res[STATS_KEY] || { seenCountries: {}, totalScanned: 0 };
   
   const seenCountries = stats.seenCountries || {};

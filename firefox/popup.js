@@ -3,11 +3,14 @@ const TOGGLE_KEY = 'extension_enabled';
 const BLOCKED_COUNTRIES_KEY = 'blocked_countries';
 const VERIFIED_ONLY_KEY = 'verified_only_mode';
 const AUTO_BLOCK_KEY = 'auto_block_mode';
+const PASSPORT_MODE_KEY = 'passport_mode';
 const HAS_SEEN_WELCOME_KEY = 'has_seen_welcome';
 const DEFAULT_ENABLED = true;
 const REPO_URL = 'https://github.com/incconutwo/twitter-account-location-in-username';
 const API_URL = 'https://twitter-countries-api.tnemoroccan.workers.dev';
 const DEBUG_STORAGE_KEY = 'debug_mode_enabled';
+const STATS_KEY = 'extension_stats';
+const DEV_DATA_SOURCE_KEY = 'dev_data_source';
 
 // DOM Elements - initialized after DOMContentLoaded
 let els = {};
@@ -530,8 +533,45 @@ function renderDebugUI() {
   btnClear.textContent = 'Clear Location Cache';
   btnClear.style.cssText = 'cursor:pointer;padding:6px;background:#303134;border:1px solid #5f6368;color:white;border-radius:4px;';
 
+  const sourceLabel = document.createElement('label');
+  sourceLabel.textContent = 'Data Source:';
+  sourceLabel.style.cssText = 'font-weight:bold; margin-top:8px; display:block;';
+  
+  const sourceSelect = document.createElement('select');
+  sourceSelect.id = 'dbg-data-source';
+  sourceSelect.style.cssText = 'width:100%; padding:6px; background:#303134; border:1px solid #5f6368; color:white; border-radius:4px; margin-top:4px; margin-bottom: 8px; font-family:inherit;';
+  
+  const options = [
+    { text: 'Auto (Default)', value: 'auto' },
+    { text: 'Local Cache Only', value: 'cache_only' },
+    { text: 'Cloudflare API Only', value: 'cloudflare_only' },
+    { text: 'Twitter API Only', value: 'twitter_only' }
+  ];
+  
+  options.forEach(opt => {
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.text;
+    sourceSelect.appendChild(option);
+  });
+  
+  chrome.storage.local.get(DEV_DATA_SOURCE_KEY, (res) => {
+    if (res[DEV_DATA_SOURCE_KEY]) {
+      sourceSelect.value = res[DEV_DATA_SOURCE_KEY];
+    } else {
+      sourceSelect.value = 'auto';
+    }
+  });
+
+  sourceSelect.addEventListener('change', (e) => {
+    const val = e.target.value;
+    chrome.storage.local.set({ [DEV_DATA_SOURCE_KEY]: val }, () => {
+      notifyContentScript({ type: 'devDataSourceUpdate', source: val });
+    });
+  });
+
   grid.append(btnUpdate, btnClear);
-  panel.append(header, grid);
+  panel.append(header, grid, sourceLabel, sourceSelect);
   document.body.appendChild(panel);
 
   btnUpdate.onclick = () => showFullScreenUpdate('9.9.9-TEST');
@@ -551,7 +591,8 @@ function init() {
     options: document.getElementById('customOptions'),
     status: document.getElementById('apiStatus'),
     verifiedOnly: document.getElementById('verifiedOnlyToggle'),
-    autoBlock: document.getElementById('autoBlockToggle')
+    autoBlock: document.getElementById('autoBlockToggle'),
+    passportMode: document.getElementById('passportModeToggle')
   };
 
   // Verify critical elements exist
@@ -560,7 +601,7 @@ function init() {
     return;
   }
 
-  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY], (res) => {
+  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, PASSPORT_MODE_KEY, STATS_KEY], (res) => {
     // 1. Setup State
     const isEnabled = res[TOGGLE_KEY] !== undefined ? res[TOGGLE_KEY] : DEFAULT_ENABLED;
     updateToggle(isEnabled);
@@ -571,6 +612,14 @@ function init() {
     // Setup new toggles
     if (res[VERIFIED_ONLY_KEY]) els.verifiedOnly.classList.add('enabled');
     if (res[AUTO_BLOCK_KEY]) els.autoBlock.classList.add('enabled');
+    // Default to enabled if not set
+    if (res[PASSPORT_MODE_KEY] !== false) els.passportMode.classList.add('enabled');
+
+    
+    // Load stats
+    const stats = res[STATS_KEY] || { hiddenPosts: 0, blockedAccounts: 0 };
+    document.getElementById('hiddenPostsCount').textContent = stats.hiddenPosts.toLocaleString();
+    document.getElementById('blockedAccountsCount').textContent = stats.blockedAccounts.toLocaleString();
     
     if (res[DEBUG_STORAGE_KEY]) renderDebugUI();
     
@@ -603,6 +652,22 @@ function init() {
       });
     });
 
+    els.passportMode.addEventListener('click', () => {
+      const newState = !els.passportMode.classList.contains('enabled');
+      els.passportMode.classList.toggle('enabled', newState);
+      chrome.storage.local.set({ [PASSPORT_MODE_KEY]: newState }, () => {
+        notifyContentScript({ type: 'passportModeUpdate', enabled: newState });
+      });
+    });
+
+    // Dashboard button handler
+    const dashboardBtn = document.getElementById('openDashboard');
+    if (dashboardBtn) {
+      dashboardBtn.addEventListener('click', () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+      });
+    }
+
     els.select.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!isDropdownLoaded) populateDropdown();
@@ -610,6 +675,16 @@ function init() {
     });
 
     window.addEventListener('click', () => els.select.classList.remove('open'));
+    
+    // Stats toggle
+    const statsToggle = document.getElementById('statsToggle');
+    const statsContainer = document.getElementById('statsContainer');
+    if (statsToggle && statsContainer) {
+      statsToggle.addEventListener('click', () => {
+        statsToggle.classList.toggle('open');
+        statsContainer.hidden = !statsContainer.hidden;
+      });
+    }
     
     const headerTitle = document.querySelector('h1');
     if (headerTitle) {
@@ -628,6 +703,7 @@ function init() {
       initUpdateCheck();
       initFeedbackUI();
       initWelcomeScreen();
+      initKofiModal();
     }, 50);
   });
 }
@@ -639,7 +715,7 @@ async function initUpdateCheck() {
   if (manifest.update_url) return; // Disables check for Store installs
 
   try {
-    const res = await fetch('https://raw.githubusercontent.com/incconutwo/twitter-account-location-in-username/main/firefox/manifest.json');
+    const res = await fetch('https://raw.githubusercontent.com/incconutwo/twitter-account-location-in-username/main/chrome/manifest.json');
     if (res.ok) {
       const data = await res.json();
       if (isNewerVersion(data.version, manifest.version)) {
@@ -802,6 +878,31 @@ function initFeedbackUI() {
     } finally {
       sendFeedback.disabled = false;
       sendFeedback.textContent = 'Send Feedback';
+    }
+  });
+}
+
+
+// --- Ko-fi Modal ---
+function initKofiModal() {
+  const kofiTrigger = document.getElementById('kofiTrigger');
+  const kofiModal = document.getElementById('kofiModal');
+  const closeKofiModal = document.getElementById('closeKofiModal');
+
+  if (!kofiTrigger || !kofiModal || !closeKofiModal) return;
+
+  kofiTrigger.addEventListener('click', () => {
+    kofiModal.hidden = false;
+  });
+
+  closeKofiModal.addEventListener('click', () => {
+    kofiModal.hidden = true;
+  });
+
+  // Close modal when clicking outside the content
+  kofiModal.addEventListener('click', (e) => {
+    if (e.target === kofiModal) {
+      kofiModal.hidden = true;
     }
   });
 }
