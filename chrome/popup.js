@@ -11,6 +11,7 @@ const API_URL = 'https://twitter-countries-api.tnemoroccan.workers.dev';
 const DEBUG_STORAGE_KEY = 'debug_mode_enabled';
 const STATS_KEY = 'extension_stats';
 const DEV_DATA_SOURCE_KEY = 'dev_data_source';
+const ALWAYS_LOAD_COMMENTS_KEY = 'always_load_comments';
 
 // DOM Elements - initialized after DOMContentLoaded
 let els = {};
@@ -19,12 +20,6 @@ let blockedCountries = [];
 let isDropdownLoaded = false;
 
 // --- Helpers ---
-
-function getTwemojiUrl(emoji) {
-  if (!emoji) return '';
-  const hex = Array.from(emoji).map(c => c.codePointAt(0).toString(16)).join('-');
-  return `https://abs-0.twimg.com/emoji/v2/svg/${hex}.svg`;
-}
 
 function updateStatusUI(type, resetTime) {
   els.status.style.display = 'flex';
@@ -359,6 +354,38 @@ function renderDebugUI() {
   btnWelcome.textContent = 'Show Welcome Screen';
   btnWelcome.style.cssText = 'cursor:pointer;padding:6px;background:#303134;border:1px solid #5f6368;color:white;border-radius:4px;';
 
+  const btnM100 = document.createElement('button');
+  btnM100.textContent = 'Test 100 Milestone';
+  btnM100.style.cssText = 'cursor:pointer;padding:6px;background:#1d9bf033;border:1px solid #1d9bf066;color:#1d9bf0;border-radius:4px;font-weight:bold;';
+
+  const btnM500 = document.createElement('button');
+  btnM500.textContent = 'Test 500 Milestone';
+  btnM500.style.cssText = 'cursor:pointer;padding:6px;background:#1d9bf033;border:1px solid #1d9bf066;color:#1d9bf0;border-radius:4px;font-weight:bold;';
+
+  const btnM2500 = document.createElement('button');
+  btnM2500.textContent = 'Test 2500 Milestone';
+  btnM2500.style.cssText = 'cursor:pointer;padding:6px;background:#1d9bf033;border:1px solid #1d9bf066;color:#1d9bf0;border-radius:4px;font-weight:bold;';
+
+  const btnTriggerRating = document.createElement('button');
+  btnTriggerRating.id = 'dbg-trigger-rating';
+  btnTriggerRating.textContent = 'Force Show Rating Widget';
+  btnTriggerRating.style.cssText = 'cursor:pointer;padding:6px;background:#303134;border:1px solid #5f6368;color:white;border-radius:4px;';
+  btnTriggerRating.onclick = () => {
+    const widget = document.getElementById('ratingWidget');
+    if (widget) widget.hidden = false;
+  };
+
+  const btnResetRating = document.createElement('button');
+  btnResetRating.id = 'dbg-reset-rating';
+  btnResetRating.textContent = 'Reset Rating State';
+  btnResetRating.style.cssText = 'cursor:pointer;padding:6px;background:#303134;border:1px solid #5f6368;color:white;border-radius:4px;';
+  btnResetRating.onclick = () => {
+    chrome.storage.local.remove(['has_rated', 'dismissed_rating'], () => {
+      btnResetRating.textContent = '✅ Rating State Reset';
+      setTimeout(() => btnResetRating.textContent = 'Reset Rating State', 2000);
+    });
+  };
+
   const sourceLabel = document.createElement('label');
   sourceLabel.textContent = 'Data Source:';
   sourceLabel.style.cssText = 'font-weight:bold; margin-top:8px; display:block;';
@@ -396,17 +423,41 @@ function renderDebugUI() {
     });
   });
 
-  grid.append(btnUpdate, btnClear, btnWelcome);
-  panel.append(header, grid, sourceLabel, sourceSelect);
+  const bannerLabel = document.createElement('label');
+  bannerLabel.style.cssText = 'display:flex; align-items:center; gap:8px; margin-top:12px; font-weight:bold; cursor:pointer;';
+  
+  const bannerCheck = document.createElement('input');
+  bannerCheck.type = 'checkbox';
+  bannerCheck.id = 'dbg-show-source-banner';
+  
+  bannerLabel.append(bannerCheck, document.createTextNode('Show Data Source Banner'));
+  
+  chrome.storage.local.get('dev_show_source_banner', (res) => {
+    bannerCheck.checked = !!res.dev_show_source_banner;
+  });
+
+  bannerCheck.addEventListener('change', (e) => {
+    const val = e.target.checked;
+    chrome.storage.local.set({ dev_show_source_banner: val }, () => {
+      notifyContentScript({ type: 'devBannerUpdate', enabled: val });
+    });
+  });
+
+  grid.append(btnUpdate, btnClear, btnWelcome, btnM100, btnM500, btnM2500, btnTriggerRating, btnResetRating);
+  panel.append(header, grid, sourceLabel, sourceSelect, bannerLabel);
   document.body.appendChild(panel);
 
   btnUpdate.onclick = () => showFullScreenUpdate('9.9.9-TEST');
   btnClear.onclick = () => {
-    // Remove all versioned cache keys
+    // Remove all versioned cache keys and the specific v4 key
     chrome.storage.local.get(null, (all) => {
       const keys = Object.keys(all).filter(k => k.startsWith('twitter_location_cache'));
       chrome.storage.local.remove(keys, () => {
-        btnClear.textContent = '✅ Cache Cleared';
+        // Also clear the negative map if it exists
+        chrome.storage.local.remove('negative_cache', () => {
+          btnClear.textContent = '✅ Cache Cleared';
+          notifyContentScript({ type: 'cacheCleared' });
+        });
       });
     });
   };
@@ -414,6 +465,10 @@ function renderDebugUI() {
     const modal = document.getElementById('welcomeModal');
     if (modal) modal.hidden = false;
   };
+
+  btnM100.onclick = () => chrome.runtime.sendMessage({ type: 'testMilestone', count: 100 });
+  btnM500.onclick = () => chrome.runtime.sendMessage({ type: 'testMilestone', count: 500 });
+  btnM2500.onclick = () => chrome.runtime.sendMessage({ type: 'testMilestone', count: 2500 });
 }
 
 function init() {
@@ -426,7 +481,8 @@ function init() {
     status: document.getElementById('apiStatus'),
     verifiedOnly: document.getElementById('verifiedOnlyToggle'),
     autoBlock: document.getElementById('autoBlockToggle'),
-    passportMode: document.getElementById('passportModeToggle')
+    passportMode: document.getElementById('passportModeToggle'),
+    alwaysLoadComments: document.getElementById('alwaysLoadCommentsToggle')
   };
 
   // Verify critical elements exist
@@ -435,7 +491,7 @@ function init() {
     return;
   }
 
-  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, PASSPORT_MODE_KEY, STATS_KEY], (res) => {
+  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, PASSPORT_MODE_KEY, ALWAYS_LOAD_COMMENTS_KEY, STATS_KEY, 'has_rated', 'dismissed_rating'], (res) => {
     // 1. Setup State
     const isEnabled = res[TOGGLE_KEY] !== undefined ? res[TOGGLE_KEY] : DEFAULT_ENABLED;
     updateToggle(isEnabled);
@@ -448,6 +504,7 @@ function init() {
     if (res[AUTO_BLOCK_KEY]) els.autoBlock.classList.add('enabled');
     // Default to enabled if not set
     if (res[PASSPORT_MODE_KEY] !== false) els.passportMode.classList.add('enabled');
+    if (res[ALWAYS_LOAD_COMMENTS_KEY]) els.alwaysLoadComments.classList.add('enabled');
     
     // Load stats with backward compatibility
     const stats = {
@@ -462,6 +519,7 @@ function init() {
     document.getElementById('totalScannedCount').textContent = stats.totalScanned.toLocaleString();
     
     if (res[DEBUG_STORAGE_KEY]) renderDebugUI();
+    initRatingUI(stats, res.has_rated, res.dismissed_rating);
     
     // 2. Setup Listeners
     els.toggle.addEventListener('click', () => {
@@ -497,6 +555,14 @@ function init() {
       els.passportMode.classList.toggle('enabled', newState);
       chrome.storage.local.set({ [PASSPORT_MODE_KEY]: newState }, () => {
         notifyContentScript({ type: 'passportModeUpdate', enabled: newState });
+      });
+    });
+
+    els.alwaysLoadComments.addEventListener('click', () => {
+      const newState = !els.alwaysLoadComments.classList.contains('enabled');
+      els.alwaysLoadComments.classList.toggle('enabled', newState);
+      chrome.storage.local.set({ [ALWAYS_LOAD_COMMENTS_KEY]: newState }, () => {
+        notifyContentScript({ type: 'alwaysLoadCommentsUpdate', enabled: newState });
       });
     });
 
@@ -738,6 +804,104 @@ function initKofiModal() {
   kofiModal.addEventListener('click', (e) => {
     if (e.target === kofiModal) {
       kofiModal.hidden = true;
+    }
+  });
+}
+
+// --- Rating System ---
+function initRatingUI(stats, hasRated, dismissedRating) {
+  const widget = document.getElementById('ratingWidget');
+  const closeBtn = document.getElementById('closeRatingWidget');
+  const starsContainer = document.getElementById('ratingStars');
+  const feedbackBox = document.getElementById('ratingFeedbackBox');
+  const commentInput = document.getElementById('ratingComment');
+  const submitBtn = document.getElementById('submitRating');
+  const statusEl = document.getElementById('ratingStatus');
+
+  if (!widget || !starsContainer) return;
+
+  let selectedRating = 0;
+
+  // Show widget if eligible
+  if (stats.totalScanned >= 500 && !hasRated && !dismissedRating) {
+    widget.hidden = false;
+  }
+
+  // Handle Close / Dismiss
+  closeBtn?.addEventListener('click', () => {
+    widget.hidden = true;
+    chrome.storage.local.set({ dismissed_rating: true });
+  });
+
+  // Handle Stars interaction
+  const stars = starsContainer.querySelectorAll('.star');
+  
+  stars.forEach((star, index) => {
+    // Mouse enter highlights stars up to current
+    star.addEventListener('mouseenter', () => {
+      stars.forEach((s, idx) => {
+        s.classList.toggle('selected', idx <= index);
+      });
+    });
+
+    // Click sets rating and shows feedback comment section
+    star.addEventListener('click', () => {
+      selectedRating = index + 1;
+      stars.forEach((s, idx) => {
+        s.classList.toggle('selected', idx < selectedRating);
+      });
+      if (feedbackBox) feedbackBox.hidden = false;
+    });
+  });
+
+  // Revert to selected rating when mouse leaves stars container
+  starsContainer.addEventListener('mouseleave', () => {
+    stars.forEach((s, idx) => {
+      s.classList.toggle('selected', idx < selectedRating);
+    });
+  });
+
+  // Submit handler
+  submitBtn?.addEventListener('click', async () => {
+    if (selectedRating === 0) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+    if (statusEl) statusEl.hidden = true;
+
+    try {
+      const response = await fetch(FEEDBACK_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rating: selectedRating,
+          message: commentInput?.value.trim() || null,
+          version: chrome.runtime.getManifest().version
+        })
+      });
+
+      if (response.ok) {
+        if (statusEl) {
+          statusEl.textContent = 'Thank you for your rating! ❤️';
+          statusEl.className = 'rating-status success';
+          statusEl.hidden = false;
+        }
+        chrome.storage.local.set({ has_rated: true });
+        setTimeout(() => {
+          widget.hidden = true;
+        }, 1500);
+      } else {
+        throw new Error('Server Error');
+      }
+    } catch (err) {
+      console.error(err);
+      if (statusEl) {
+        statusEl.textContent = 'Failed to submit. Please try again.';
+        statusEl.className = 'rating-status error';
+        statusEl.hidden = false;
+      }
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Rating';
     }
   });
 }

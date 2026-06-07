@@ -1,8 +1,8 @@
-# Privacy Policy for X/Twitter Country Flags & Blocker
+# Privacy Policy for X (Twitter) Location Flags, Local Time & Blocker
 
 **Last Updated:** November 25, 2025
 
-This Privacy Policy describes how the **X/Twitter Country Flags & Blocker** extension collects, uses, and discloses information.
+This Privacy Policy describes how the **X (Twitter) Location Flags, Local Time & Blocker** extension collects, uses, and discloses information.
 
 ## 1. Data Collection
 We prioritize user privacy. The extension operates primarily on your local device. However, to provide community-sourced location data, the extension communicates with a third-party database (Cloudflare KV).

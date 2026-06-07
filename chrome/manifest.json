@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "X Location, Local Time & Country Blocker",
+  "name": "X (Twitter) Location Flags, Local Time & Blocker",
   "version": "1.2.0",
   "description": "Adds country flags to X/Twitter usernames and lets you auto-hide posts from specific countries. Fast, private, and community-driven.",
   "permissions": [
@@ -39,6 +39,15 @@
       ],
       "js": ["countryFlags.js", "content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": ["pageScript.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [

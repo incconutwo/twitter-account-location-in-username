@@ -26,6 +26,8 @@ const els = {
 // Convert Flag Emoji to ISO 2-letter code (e.g. 🇺🇸 -> US)
 function getIsoCodeFromEmoji(emoji) {
   if (!emoji) return null;
+  // Group UK subdivision flags into the United Kingdom ISO code
+  if (["🏴󠁧󠁢󠁥󠁮󠁧󠁿", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "🏴󠁧󠁢󠁷󠁬󠁳󠁿"].includes(emoji)) return "GB";
   const chars = Array.from(emoji);
   if (chars.length !== 2) return null;
   
@@ -35,12 +37,7 @@ function getIsoCodeFromEmoji(emoji) {
   return String.fromCharCode(c1) + String.fromCharCode(c2);
 }
 
-// Get Twemoji URL (reuse logic from popup)
-function getTwemojiUrl(emoji) {
-  if (!emoji) return '';
-  const hex = Array.from(emoji).map(c => c.codePointAt(0).toString(16)).join('-');
-  return `https://abs-0.twimg.com/emoji/v2/svg/${hex}.svg`;
-}
+
 
 function formatCount(num) {
   return new Intl.NumberFormat().format(num);
@@ -51,7 +48,10 @@ function formatCount(num) {
 async function loadAndRenderMap(countryCounts) {
   try {
     // Load SVG map from local file
-    const res = await fetch(chrome.runtime.getURL('world-map.svg'));
+    const mapUrl = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL)
+      ? chrome.runtime.getURL('world-map.svg')
+      : 'world-map.svg';
+    const res = await fetch(mapUrl);
     if (!res.ok) throw new Error('Failed to load map');
     
     const svgText = await res.text();
@@ -182,7 +182,7 @@ function renderCountryList(sortedData) {
       </div>
       <div class="country-info">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span class="country-name">${item.country}</span>
+          <span class="country-name"></span>
           <span class="country-count">${formatCount(item.count)}</span>
         </div>
         <div class="country-bar">
@@ -191,6 +191,33 @@ function renderCountryList(sortedData) {
       </div>
     `;
     
+    div.querySelector('.country-name').textContent = item.country;
+    
+    // Add hover highlighting link to map
+    const iso = getIsoCodeFromEmoji(item.flag);
+    if (iso) {
+      const isoLower = iso.toLowerCase();
+      div.dataset.iso = isoLower;
+      
+      div.addEventListener('mouseenter', () => {
+        const svg = els.mapContainer.querySelector('svg');
+        if (!svg) return;
+        const element = svg.getElementById(isoLower);
+        if (element) {
+          element.classList.add('hovered');
+        }
+      });
+      
+      div.addEventListener('mouseleave', () => {
+        const svg = els.mapContainer.querySelector('svg');
+        if (!svg) return;
+        const element = svg.getElementById(isoLower);
+        if (element) {
+          element.classList.remove('hovered');
+        }
+      });
+    }
+
     fragment.appendChild(div);
   });
   
@@ -231,9 +258,13 @@ function setupResetButton() {
   });
 
   els.confirmResetBtn.addEventListener('click', () => {
-    chrome.storage.local.set({ [STATS_KEY]: { seenCountries: {}, totalScanned: 0 } }, () => {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ [STATS_KEY]: { seenCountries: {}, totalScanned: 0 } }, () => {
+        window.location.reload();
+      });
+    } else {
       window.location.reload();
-    });
+    }
   });
 
   // Close on backdrop click
@@ -242,10 +273,45 @@ function setupResetButton() {
   });
 }
 
+function setupChangelogModal() {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('update') === 'true') {
+    const changelogModal = document.getElementById('changelogModal');
+    if (changelogModal) {
+      changelogModal.hidden = false;
+      
+      const closeBtn = document.getElementById('closeChangelog');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+          changelogModal.hidden = true;
+        });
+      }
+    }
+  }
+}
+
 async function init() {
   // Load data
-  const res = await chrome.storage.local.get(STATS_KEY);
-  const stats = res[STATS_KEY] || { seenCountries: {}, totalScanned: 0 };
+  let stats = { seenCountries: {}, totalScanned: 0 };
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    const res = await chrome.storage.local.get(STATS_KEY);
+    stats = res[STATS_KEY] || stats;
+  } else {
+    // Mock data for local development/testing
+    stats = {
+      seenCountries: {
+        'United States': 142,
+        'United Kingdom': 88,
+        'Japan': 45,
+        'Germany': 31,
+        'Canada': 18,
+        'France': 12,
+        'Australia': 9,
+        'Brazil': 7
+      },
+      totalScanned: 352
+    };
+  }
   
   const seenCountries = stats.seenCountries || {};
   const totalScanned = stats.totalScanned || 0;
@@ -270,6 +336,22 @@ async function init() {
   renderCountryList(countryArray);
   setupShareButton(totalScanned, countryArray, Object.keys(seenCountries).length);
   setupResetButton();
+  setupChangelogModal();
+
+  // Animate Global Exploration Progress
+  const goalPercentage = document.getElementById('goalPercentage');
+  const goalProgressFill = document.getElementById('goalProgressFill');
+  
+  if (goalPercentage && goalProgressFill) {
+    const pct = Math.min(100, Math.round((countryArray.length / 195) * 100));
+    goalPercentage.textContent = `${pct}%`;
+    
+    // Set a very slight delay so the transition triggers and animates from 0%
+    setTimeout(() => {
+      goalProgressFill.style.width = `${pct}%`;
+    }, 100);
+  }
+
   await loadAndRenderMap(seenCountries);
 }
 

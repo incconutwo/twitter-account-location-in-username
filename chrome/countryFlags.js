@@ -77,7 +77,7 @@ const COUNTRY_FLAGS = {
   "France": "🇫🇷",
   "French Guiana": "🇬🇫",
   "French Polynesia": "🇵🇫",
-  "French Southern Territories": "🇹4",
+  "French Southern Territories": "🇹🇫",
   "Gabon": "🇬🇦",
   "Gambia": "🇬🇲",
   "Georgia": "🇬🇪",
@@ -243,7 +243,7 @@ const COUNTRY_FLAGS = {
   "Vietnam": "🇻🇳",
   "Viet Nam": "🇻🇳",
   "Virgin Islands, British": "🇻🇬",
-  "Virgin Islands, U.S.": "🇻6",
+  "Virgin Islands, U.S.": "🇻🇮",
   "Wallis and Futuna": "🇼🇫",
   "Western Sahara": "🇪🇭",
   "Yemen": "🇾🇪",
@@ -346,6 +346,7 @@ const COUNTRY_FLAGS = {
   "Latin America": "🌎",
   "Latin America and the Caribbean": "🌎",
   "Latin America & Caribbean": "🌎",
+  "Caribbean": "🌎",
   "Europe & Central Asia": "🌍",
   "Middle East": "🌍",
   "Middle East & North Africa": "🌍",
@@ -356,6 +357,7 @@ const COUNTRY_FLAGS = {
   "East Asia & Pacific": "🌏",
   "South Asia": "🌏",
   "Southeast Asia": "🌏",
+  "West Asia": "🌏",
   "Asia-Pacific": "🌏",
   "Oceania": "🌏",
   "Antarctica": "🇦🇶",
@@ -366,9 +368,14 @@ const COUNTRY_FLAGS = {
 
 // --- Performance Optimizations: Pre-computed at load time ---
 
-// O(1) lowercase lookup map
+// O(1) lowercase lookup map for flags
 const COUNTRY_FLAGS_LOWER = new Map(
   Object.entries(COUNTRY_FLAGS).map(([k, v]) => [k.toLowerCase(), v])
+);
+
+// O(1) lowercase lookup map for canonical country names
+const COUNTRY_NAMES_LOWER = new Map(
+  Object.keys(COUNTRY_FLAGS).map(k => [k.toLowerCase(), k])
 );
 
 // Pre-sorted by length (longest first) for substring matching
@@ -376,17 +383,59 @@ const SORTED_COUNTRIES = Object.keys(COUNTRY_FLAGS)
   .sort((a, b) => b.length - a.length)
   .map(c => ({ name: c, lower: c.toLowerCase(), flag: COUNTRY_FLAGS[c] }));
 
-// Pre-cached Twemoji URLs
 const TWEMOJI_URLS = new Map();
-for (const emoji of Object.values(COUNTRY_FLAGS)) {
-  if (!TWEMOJI_URLS.has(emoji)) {
+function getTwemojiUrl(emoji) {
+  if (!emoji) return '';
+  let url = TWEMOJI_URLS.get(emoji);
+  if (!url) {
     const hex = Array.from(emoji).map(c => c.codePointAt(0).toString(16)).join('-');
-    TWEMOJI_URLS.set(emoji, `https://abs-0.twimg.com/emoji/v2/svg/${hex}.svg`);
+    url = `https://abs-0.twimg.com/emoji/v2/svg/${hex}.svg`;
+    TWEMOJI_URLS.set(emoji, url);
   }
+  return url;
 }
 
-function getTwemojiUrl(emoji) {
-  return TWEMOJI_URLS.get(emoji) || null;
+// Performance: Cache resolved location strings to avoid O(N) re-scan
+const _flagCache = new Map();
+const _nameCache = new Map();
+const _CACHE_MAX = 500;
+
+function matchTokenGrams(tokens, map) {
+  for (let i = 0; i < tokens.length; i++) {
+    for (let len = 1; len <= 3; len++) {
+      if (i + len <= tokens.length) {
+        const gram = tokens.slice(i, i + len).join(' ');
+        if (map.has(gram)) return map.get(gram);
+      }
+    }
+  }
+  return null;
+}
+
+function checkIfUSState(str) {
+  // Pattern 1: Ending with a comma followed by any US state code (e.g., "Houston, TX" or "Little Rock, AR")
+  const stateAbbrevRegex = /,\s*\b(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\b\s*$/i;
+  if (stateAbbrevRegex.test(str)) return true;
+  
+  // Pattern 2: Exactly matches a non-ambiguous US state code (e.g., "tx", "fl", "ca")
+  const exactStateCodes = new Set(['al', 'ak', 'az', 'ar', 'ca', 'co', 'ct', 'de', 'fl', 'ga', 'id', 'il', 'ia', 'ks', 'ky', 'md', 'ma', 'mi', 'mn', 'ms', 'mo', 'mt', 'ne', 'nv', 'nh', 'nj', 'nm', 'ny', 'nc', 'nd', 'oh', 'ok', 'pa', 'ri', 'sc', 'sd', 'tn', 'tx', 'ut', 'vt', 'va', 'wv', 'wi', 'wy']);
+  if (exactStateCodes.has(str)) return true;
+
+  // Pattern 3: Contains a full US state name with word boundaries
+  const fullStates = ["california", "texas", "florida", "illinois", "pennsylvania", "ohio", "georgia", "michigan", "north carolina", "virginia", "washington", "massachusetts", "arizona", "tennessee", "indiana", "missouri", "maryland", "wisconsin", "colorado", "minnesota", "oregon", "nevada", "connecticut", "utah", "iowa", "kentucky", "louisiana", "alabama", "oklahoma", "mississippi", "arkansas", "nebraska", "kansas", "new mexico", "hawaii", "alaska", "montana", "idaho", "maine", "new hampshire", "vermont", "rhode island", "delaware", "south dakota", "north dakota", "wyoming", "west virginia"];
+  
+  for (const state of fullStates) {
+    const idx = str.indexOf(state);
+    if (idx !== -1) {
+      const before = str[idx - 1];
+      const after = str[idx + state.length];
+      if ((!before || before === ' ' || before === ',') && 
+          (!after || after === ' ' || after === ',')) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function getCountryFlag(countryName) {
@@ -395,26 +444,43 @@ function getCountryFlag(countryName) {
   const normalized = countryName.trim();
   const normalizedLower = normalized.toLowerCase();
   
+  // Check cache first
+  if (_flagCache.has(normalizedLower)) return _flagCache.get(normalizedLower);
+  
+  let result = null;
+
   // 1. O(1) exact match (most common case)
   if (COUNTRY_FLAGS_LOWER.has(normalizedLower)) {
-    return COUNTRY_FLAGS_LOWER.get(normalizedLower);
-  }
-  
-  // 2. Substring match using pre-sorted list (e.g. "Paris, France" -> France)
-  for (const { name, lower, flag } of SORTED_COUNTRIES) {
-    const idx = normalizedLower.indexOf(lower);
-    if (idx !== -1) {
-      // Word boundary check without regex (faster)
-      const before = normalizedLower[idx - 1];
-      const after = normalizedLower[idx + lower.length];
-      if ((!before || before === ' ' || before === ',') && 
-          (!after || after === ' ' || after === ',')) {
-        return flag;
+    result = COUNTRY_FLAGS_LOWER.get(normalizedLower);
+  } else if (checkIfUSState(normalizedLower)) {
+    result = "🇺🇸";
+  } else {
+    // 2. Tokenized match (1-gram, 2-gram, 3-gram)
+    const tokens = normalizedLower.split(/[\s,.()\-\/]+/).filter(Boolean);
+    result = matchTokenGrams(tokens, COUNTRY_FLAGS_LOWER);
+
+    // 3. Fallback to O(N) substring match using pre-sorted list (e.g. "Paris, France" -> France)
+    if (!result) {
+      for (const { name, lower, flag } of SORTED_COUNTRIES) {
+        const idx = normalizedLower.indexOf(lower);
+        if (idx !== -1) {
+          // Word boundary check without regex (faster)
+          const before = normalizedLower[idx - 1];
+          const after = normalizedLower[idx + lower.length];
+          if ((!before || before === ' ' || before === ',') && 
+              (!after || after === ' ' || after === ',')) {
+            result = flag;
+            break;
+          }
+        }
       }
     }
   }
   
-  return null;
+  // Cache the result (including null to avoid re-scanning misses)
+  if (_flagCache.size >= _CACHE_MAX) _flagCache.delete(_flagCache.keys().next().value);
+  _flagCache.set(normalizedLower, result);
+  return result;
 }
 
 // Resolves a location string to a canonical country name (avoids duplicate lookup)
@@ -423,25 +489,41 @@ function resolveCountryName(location) {
   
   const normalizedLower = location.trim().toLowerCase();
   
-  // O(1) exact match
-  for (const { name, lower } of SORTED_COUNTRIES) {
-    if (lower === normalizedLower) return name;
-  }
+  // Check cache first
+  if (_nameCache.has(normalizedLower)) return _nameCache.get(normalizedLower);
   
-  // Substring match
-  for (const { name, lower } of SORTED_COUNTRIES) {
-    const idx = normalizedLower.indexOf(lower);
-    if (idx !== -1) {
-      const before = normalizedLower[idx - 1];
-      const after = normalizedLower[idx + lower.length];
-      if ((!before || before === ' ' || before === ',') && 
-          (!after || after === ' ' || after === ',')) {
-        return name;
+  let result = null;
+
+  // 1. O(1) exact match
+  if (COUNTRY_NAMES_LOWER.has(normalizedLower)) {
+    result = COUNTRY_NAMES_LOWER.get(normalizedLower);
+  } else if (checkIfUSState(normalizedLower)) {
+    result = "United States";
+  } else {
+    // 2. Tokenized match
+    const tokens = normalizedLower.split(/[\s,.()\-\/]+/).filter(Boolean);
+    result = matchTokenGrams(tokens, COUNTRY_NAMES_LOWER);
+
+    // 3. Fallback to O(N) substring match
+    if (!result) {
+      for (const { name, lower } of SORTED_COUNTRIES) {
+        const idx = normalizedLower.indexOf(lower);
+        if (idx !== -1) {
+          const before = normalizedLower[idx - 1];
+          const after = normalizedLower[idx + lower.length];
+          if ((!before || before === ' ' || before === ',') && 
+              (!after || after === ' ' || after === ',')) {
+            result = name;
+            break;
+          }
+        }
       }
     }
   }
   
-  return null;
+  if (_nameCache.size >= _CACHE_MAX) _nameCache.delete(_nameCache.keys().next().value);
+  _nameCache.set(normalizedLower, result);
+  return result;
 }
 
 // --- Timezone Resolution System ---
@@ -671,14 +753,13 @@ const US_STATE_TIMEZONES = {
 // These are only checked when the whole location string equals them (or is comma-separated with them).
 const SHORT_CITY_ABBREVS = new Set(['la', 'sf', 'dc', 'nyc', 'rio', 'ny']);
 
+const WORD_SEP = /[\s,.()\-\/]/;
 // Returns true if `needle` appears at a word boundary inside `haystack`
 function hasWordBoundary(haystack, needle) {
   const idx = haystack.indexOf(needle);
   if (idx === -1) return false;
-  const before = idx === 0 ? '' : haystack[idx - 1];
-  const after  = idx + needle.length >= haystack.length ? '' : haystack[idx + needle.length];
-  const sep    = /[\s,.()\-\/]/;
-  return (!before || sep.test(before)) && (!after || sep.test(after));
+  const before = haystack[idx - 1], after = haystack[idx + needle.length];
+  return (!before || WORD_SEP.test(before)) && (!after || WORD_SEP.test(after));
 }
 
 // Resolve a location string to an IANA timezone
@@ -723,17 +804,25 @@ function resolveTimezone(locationStr) {
   return null;
 }
 
+// Cache instantiated Intl.DateTimeFormat objects to avoid expensive re-creation
+const _timeFormatterCache = new Map();
+const _hourFormatterCache = new Map();
 
 // Format local time using Intl (zero-dependency, DST-aware)
 function getLocalTimeString(ianaTimezone) {
   if (!ianaTimezone) return null;
   try {
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: ianaTimezone,
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    }).format(new Date());
+    let formatter = _timeFormatterCache.get(ianaTimezone);
+    if (!formatter) {
+      formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: ianaTimezone,
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      _timeFormatterCache.set(ianaTimezone, formatter);
+    }
+    return formatter.format(new Date());
   } catch (e) {
     return null; // Invalid timezone string
   }
@@ -743,14 +832,20 @@ function getLocalTimeString(ianaTimezone) {
 function getLocalHour(ianaTimezone) {
   if (!ianaTimezone) return null;
   try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: ianaTimezone,
-      hour: 'numeric',
-      hour12: false
-    }).formatToParts(new Date());
+    let formatter = _hourFormatterCache.get(ianaTimezone);
+    if (!formatter) {
+      formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: ianaTimezone,
+        hour: 'numeric',
+        hour12: false
+      });
+      _hourFormatterCache.set(ianaTimezone, formatter);
+    }
+    const parts = formatter.formatToParts(new Date());
     const hourPart = parts.find(p => p.type === 'hour');
     return hourPart ? parseInt(hourPart.value) : null;
   } catch (e) {
     return null;
   }
 }
+
