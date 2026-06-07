@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "X/Twitter Country Flags & Blocker",
-  "version": "1.1.1",
+  "name": "X/Twitter Location Flags, Time & Blocker",
+  "version": "1.2.0",
   "description": "Adds country flags to X/Twitter usernames and lets you auto-hide posts from specific countries. Fast, private, and community-driven.",
   "permissions": [
     "activeTab",
@@ -23,7 +23,9 @@
     "128": "icons/128.png"
   },
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "host_permissions": [
     "https://x.com/*",
@@ -37,13 +39,29 @@
         "https://x.com/*",
         "https://twitter.com/*"
       ],
-      "js": ["countryFlags.js", "content.js"],
+      "js": [
+        "countryFlags.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "pageScript.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["pageScript.js"],
+      "resources": [
+        "pageScript.js"
+      ],
       "matches": [
         "https://x.com/*",
         "https://twitter.com/*"
@@ -53,12 +71,15 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "twitter-flags@incconutwo.com",
-      "strict_min_version": "109.0",
+      "strict_min_version": "140.0",
       "data_collection_permissions": {
         "required": [
           "websiteContent"
         ]
       }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
     }
   }
 }

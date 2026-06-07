@@ -3,11 +3,15 @@ const TOGGLE_KEY = 'extension_enabled';
 const BLOCKED_COUNTRIES_KEY = 'blocked_countries';
 const VERIFIED_ONLY_KEY = 'verified_only_mode';
 const AUTO_BLOCK_KEY = 'auto_block_mode';
+const PASSPORT_MODE_KEY = 'passport_mode';
 const HAS_SEEN_WELCOME_KEY = 'has_seen_welcome';
 const DEFAULT_ENABLED = true;
 const REPO_URL = 'https://github.com/incconutwo/twitter-account-location-in-username';
 const API_URL = 'https://twitter-countries-api.tnemoroccan.workers.dev';
 const DEBUG_STORAGE_KEY = 'debug_mode_enabled';
+const STATS_KEY = 'extension_stats';
+const DEV_DATA_SOURCE_KEY = 'dev_data_source';
+const ALWAYS_LOAD_COMMENTS_KEY = 'always_load_comments';
 
 // DOM Elements - initialized after DOMContentLoaded
 let els = {};
@@ -16,12 +20,6 @@ let blockedCountries = [];
 let isDropdownLoaded = false;
 
 // --- Helpers ---
-
-function getTwemojiUrl(emoji) {
-  if (!emoji) return '';
-  const hex = Array.from(emoji).map(c => c.codePointAt(0).toString(16)).join('-');
-  return `https://abs-0.twimg.com/emoji/v2/svg/${hex}.svg`;
-}
 
 function updateStatusUI(type, resetTime) {
   els.status.style.display = 'flex';
@@ -324,186 +322,7 @@ function populateDropdown() {
   setTimeout(() => searchInput.focus(), 50);
 }
 
-// --- Updates & Feedback ---
-
-async function initUpdateCheck() {
-  const manifest = chrome.runtime.getManifest();
-  if (manifest.update_url) return; 
-
-  try {
-    const res = await fetch('https://raw.githubusercontent.com/incconutwo/twitter-account-location-in-username/main/manifest.json');
-    if (res.ok) {
-      const data = await res.json();
-      if (isNewerVersion(data.version, manifest.version)) {
-        chrome.storage.local.get('dismissed_update_version', (result) => {
-          if (result.dismissed_update_version === data.version) {
-            showUpdateBanner(data.version);
-          } else {
-            showFullScreenUpdate(data.version);
-          }
-        });
-      }
-    }
-  } catch (e) {}
-}
-
-function isNewerVersion(latest, current) {
-  const l = latest.split('.').map(Number);
-  const c = current.split('.').map(Number);
-  for (let i = 0; i < Math.max(l.length, c.length); i++) {
-    if ((l[i] || 0) > (c[i] || 0)) return true;
-    if ((l[i] || 0) < (c[i] || 0)) return false;
-  }
-  return false;
-}
-
-function showUpdateBanner(version) {
-  if (document.querySelector('.update-banner')) return;
-  const banner = document.createElement('div');
-  banner.className = 'update-banner';
-  
-  const span = document.createElement('span');
-  span.textContent = `🚀 Update ${version} available`;
-  
-  const link = document.createElement('a');
-  link.href = REPO_URL;
-  link.target = '_blank';
-  link.textContent = 'Get it';
-  link.style.cssText = `color:#0277bd;font-weight:700;margin-left:8px;text-decoration:none;`;
-  
-  banner.append(span, link);
-  banner.style.cssText = `background:#e1f5fe;border:1px solid #b3e5fc;color:#0277bd;padding:10px;border-radius:8px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;animation:slideIn 0.3s;font-size:13px;`;
-  
-  const header = document.querySelector('.header');
-  if (header) header.parentNode.insertBefore(banner, header.nextSibling);
-}
-
-function showFullScreenUpdate(version) {
-  if (document.querySelector('.update-modal')) return;
-  const modal = document.createElement('div');
-  modal.className = 'update-modal';
-  
-  const h2 = document.createElement('h2');
-  h2.textContent = 'Update Available';
-  
-  const p = document.createElement('p');
-  const pText = document.createTextNode(`A new version ${version} is ready. `);
-  const b = document.createElement('b');
-  b.textContent = version;
-  p.append(pText, b);
-  
-  const link = document.createElement('a');
-  link.href = REPO_URL;
-  link.target = '_blank';
-  link.className = 'update-modal-btn';
-  link.textContent = 'Get Update';
-  
-  const btn = document.createElement('button');
-  btn.className = 'update-dismiss';
-  btn.textContent = 'Remind me later';
-  btn.onclick = () => {
-    chrome.storage.local.set({ 'dismissed_update_version': version });
-    modal.remove();
-    showUpdateBanner(version);
-  };
-
-  modal.append(h2, p, link, btn);
-  
-  const style = document.createElement('style');
-  style.textContent = `.update-modal{position:fixed;top:0;left:0;width:100%;height:100%;background:#fff;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;box-sizing:border-box}.update-modal h2{margin:0 0 12px;font-size:18px}.update-modal-btn{background:#1d9bf0;color:#fff;border:none;padding:10px 24px;border-radius:99px;font-weight:700;text-decoration:none;margin-bottom:16px;cursor:pointer}.update-dismiss{background:none;border:none;color:#536471;cursor:pointer;font-size:13px}@media(prefers-color-scheme:dark){.update-modal{background:#15202b;color:#f7f9f9}.update-dismiss{color:#8b98a5}}`;
-  document.head.appendChild(style);
-  document.body.appendChild(modal);
-}
-
-function initFeedbackUI() {
-  const style = document.createElement('style');
-  style.textContent = `
-    .fb-section { margin-top: 12px; font-size: 12px; }
-    .fb-trigger { cursor: pointer; color: #1d9bf0; text-align: left; padding: 4px 0; transition: color 0.2s; font-weight: 500; }
-    .fb-trigger:hover { text-decoration: underline; color: #1a8cd8; }
-    .fb-form { display: none; position: relative; margin-top: 10px; animation: fbFade 0.2s ease-out; }
-    .fb-close { position: absolute; right: 0; top: -22px; cursor: pointer; color: #536471; font-size: 18px; font-weight: bold; padding: 2px 6px; line-height: 1; }
-    .fb-close:hover { color: #0f1419; }
-    .fb-input { width: 100%; box-sizing: border-box; height: 60px; border: 1px solid #cfd9de; border-radius: 4px; padding: 8px; font-family: inherit; font-size: 13px; resize: none; margin-bottom: 8px; background: #fff; color: #0f1419; display: block; }
-    .fb-input:focus { border-color: #1d9bf0; outline: none; }
-    .fb-btn { width: 100%; background: #0f1419; color: white; border: none; padding: 8px; border-radius: 999px; font-weight: 700; cursor: pointer; font-size: 13px; transition: opacity 0.2s; }
-    .fb-btn:hover { opacity: 0.9; }
-    .fb-btn:disabled { opacity: 0.5; cursor: default; }
-    .fb-success { display: none; color: #00ba7c; text-align: center; margin-top: 8px; font-weight: 500; }
-    @keyframes fbFade { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
-    @media (prefers-color-scheme: dark) {
-      .fb-close { color: #8b98a5; }
-      .fb-close:hover { color: #f7f9f9; }
-      .fb-input { background: #15202b; border-color: #38444d; color: #f7f9f9; }
-      .fb-input:focus { background: #1e2732; }
-      .fb-btn { background: #eff3f4; color: #0f1419; }
-    }
-  `;
-  document.head.appendChild(style);
-
-  const container = document.createElement('div');
-  container.className = 'fb-section';
-
-  const trigger = document.createElement('div');
-  trigger.id = 'fbTrigger';
-  trigger.className = 'fb-trigger';
-  trigger.textContent = '💬 Have feedback or found a bug?';
-
-  const form = document.createElement('div');
-  form.id = 'fbForm';
-  form.className = 'fb-form';
-
-  const close = document.createElement('span');
-  close.id = 'fbClose';
-  close.className = 'fb-close';
-  close.title = 'Dismiss';
-  close.textContent = '×';
-
-  const text = document.createElement('textarea');
-  text.id = 'fbText';
-  text.className = 'fb-input';
-  text.placeholder = 'Tell us what you think...';
-
-  const send = document.createElement('button');
-  send.id = 'fbSend';
-  send.className = 'fb-btn';
-  send.textContent = 'Send Feedback';
-
-  const success = document.createElement('div');
-  success.id = 'fbSuccess';
-  success.className = 'fb-success';
-  success.textContent = '✅ Thanks for your feedback!';
-
-  form.append(close, text, send);
-  container.append(trigger, form, success);
-  document.body.appendChild(container);
-
-  trigger.onclick = () => { trigger.style.display = 'none'; form.style.display = 'block'; text.focus(); };
-  close.onclick = () => { form.style.display = 'none'; trigger.style.display = 'block'; };
-
-  send.onclick = async () => {
-    const msg = text.value.trim();
-    if (!msg) return;
-    send.disabled = true; send.textContent = 'Sending...';
-    try {
-      await fetch(`${API_URL}/feedback`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ message: msg, version: chrome.runtime.getManifest().version })
-      });
-      form.style.display = 'none';
-      success.style.display = 'block';
-      setTimeout(() => {
-        success.style.display = 'none';
-        trigger.style.display = 'block';
-        text.value = '';
-        send.disabled = false; send.textContent = 'Send Feedback';
-      }, 3000);
-    } catch(e) {
-      send.textContent = 'Error. Try again.'; send.disabled = false;
-    }
-  };
-}
+// (Update check, feedback — defined below init())
 
 // --- Debug & Main ---
 
@@ -530,16 +349,126 @@ function renderDebugUI() {
   btnClear.textContent = 'Clear Location Cache';
   btnClear.style.cssText = 'cursor:pointer;padding:6px;background:#303134;border:1px solid #5f6368;color:white;border-radius:4px;';
 
-  grid.append(btnUpdate, btnClear);
-  panel.append(header, grid);
+  const btnWelcome = document.createElement('button');
+  btnWelcome.id = 'dbg-show-welcome';
+  btnWelcome.textContent = 'Show Welcome Screen';
+  btnWelcome.style.cssText = 'cursor:pointer;padding:6px;background:#303134;border:1px solid #5f6368;color:white;border-radius:4px;';
+
+  const btnM100 = document.createElement('button');
+  btnM100.textContent = 'Test 100 Milestone';
+  btnM100.style.cssText = 'cursor:pointer;padding:6px;background:#1d9bf033;border:1px solid #1d9bf066;color:#1d9bf0;border-radius:4px;font-weight:bold;';
+
+  const btnM500 = document.createElement('button');
+  btnM500.textContent = 'Test 500 Milestone';
+  btnM500.style.cssText = 'cursor:pointer;padding:6px;background:#1d9bf033;border:1px solid #1d9bf066;color:#1d9bf0;border-radius:4px;font-weight:bold;';
+
+  const btnM2500 = document.createElement('button');
+  btnM2500.textContent = 'Test 2500 Milestone';
+  btnM2500.style.cssText = 'cursor:pointer;padding:6px;background:#1d9bf033;border:1px solid #1d9bf066;color:#1d9bf0;border-radius:4px;font-weight:bold;';
+
+  const btnTriggerRating = document.createElement('button');
+  btnTriggerRating.id = 'dbg-trigger-rating';
+  btnTriggerRating.textContent = 'Force Show Rating Widget';
+  btnTriggerRating.style.cssText = 'cursor:pointer;padding:6px;background:#303134;border:1px solid #5f6368;color:white;border-radius:4px;';
+  btnTriggerRating.onclick = () => {
+    const widget = document.getElementById('ratingWidget');
+    if (widget) widget.hidden = false;
+  };
+
+  const btnResetRating = document.createElement('button');
+  btnResetRating.id = 'dbg-reset-rating';
+  btnResetRating.textContent = 'Reset Rating State';
+  btnResetRating.style.cssText = 'cursor:pointer;padding:6px;background:#303134;border:1px solid #5f6368;color:white;border-radius:4px;';
+  btnResetRating.onclick = () => {
+    chrome.storage.local.remove(['has_rated', 'dismissed_rating'], () => {
+      btnResetRating.textContent = '✅ Rating State Reset';
+      setTimeout(() => btnResetRating.textContent = 'Reset Rating State', 2000);
+    });
+  };
+
+  const sourceLabel = document.createElement('label');
+  sourceLabel.textContent = 'Data Source:';
+  sourceLabel.style.cssText = 'font-weight:bold; margin-top:8px; display:block;';
+  
+  const sourceSelect = document.createElement('select');
+  sourceSelect.id = 'dbg-data-source';
+  sourceSelect.style.cssText = 'width:100%; padding:6px; background:#303134; border:1px solid #5f6368; color:white; border-radius:4px; margin-top:4px; margin-bottom: 8px; font-family:inherit;';
+  
+  const options = [
+    { text: 'Auto (Default)', value: 'auto' },
+    { text: 'Local Cache Only', value: 'cache_only' },
+    { text: 'Cloudflare API Only', value: 'cloudflare_only' },
+    { text: 'Twitter API Only', value: 'twitter_only' }
+  ];
+  
+  options.forEach(opt => {
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.text;
+    sourceSelect.appendChild(option);
+  });
+  
+  chrome.storage.local.get(DEV_DATA_SOURCE_KEY, (res) => {
+    if (res[DEV_DATA_SOURCE_KEY]) {
+      sourceSelect.value = res[DEV_DATA_SOURCE_KEY];
+    } else {
+      sourceSelect.value = 'auto';
+    }
+  });
+
+  sourceSelect.addEventListener('change', (e) => {
+    const val = e.target.value;
+    chrome.storage.local.set({ [DEV_DATA_SOURCE_KEY]: val }, () => {
+      notifyContentScript({ type: 'devDataSourceUpdate', source: val });
+    });
+  });
+
+  const bannerLabel = document.createElement('label');
+  bannerLabel.style.cssText = 'display:flex; align-items:center; gap:8px; margin-top:12px; font-weight:bold; cursor:pointer;';
+  
+  const bannerCheck = document.createElement('input');
+  bannerCheck.type = 'checkbox';
+  bannerCheck.id = 'dbg-show-source-banner';
+  
+  bannerLabel.append(bannerCheck, document.createTextNode('Show Data Source Banner'));
+  
+  chrome.storage.local.get('dev_show_source_banner', (res) => {
+    bannerCheck.checked = !!res.dev_show_source_banner;
+  });
+
+  bannerCheck.addEventListener('change', (e) => {
+    const val = e.target.checked;
+    chrome.storage.local.set({ dev_show_source_banner: val }, () => {
+      notifyContentScript({ type: 'devBannerUpdate', enabled: val });
+    });
+  });
+
+  grid.append(btnUpdate, btnClear, btnWelcome, btnM100, btnM500, btnM2500, btnTriggerRating, btnResetRating);
+  panel.append(header, grid, sourceLabel, sourceSelect, bannerLabel);
   document.body.appendChild(panel);
 
   btnUpdate.onclick = () => showFullScreenUpdate('9.9.9-TEST');
   btnClear.onclick = () => {
-    chrome.storage.local.remove('twitter_location_cache', () => {
-      btnClear.textContent = '✅ Cache Cleared';
+    // Remove all versioned cache keys and the specific v4 key
+    chrome.storage.local.get(null, (all) => {
+      const keys = Object.keys(all).filter(k => k.startsWith('twitter_location_cache'));
+      chrome.storage.local.remove(keys, () => {
+        // Also clear the negative map if it exists
+        chrome.storage.local.remove('negative_cache', () => {
+          btnClear.textContent = '✅ Cache Cleared';
+          notifyContentScript({ type: 'cacheCleared' });
+        });
+      });
     });
   };
+  btnWelcome.onclick = () => {
+    const modal = document.getElementById('welcomeModal');
+    if (modal) modal.hidden = false;
+  };
+
+  btnM100.onclick = () => chrome.runtime.sendMessage({ type: 'testMilestone', count: 100 });
+  btnM500.onclick = () => chrome.runtime.sendMessage({ type: 'testMilestone', count: 500 });
+  btnM2500.onclick = () => chrome.runtime.sendMessage({ type: 'testMilestone', count: 2500 });
 }
 
 function init() {
@@ -551,7 +480,9 @@ function init() {
     options: document.getElementById('customOptions'),
     status: document.getElementById('apiStatus'),
     verifiedOnly: document.getElementById('verifiedOnlyToggle'),
-    autoBlock: document.getElementById('autoBlockToggle')
+    autoBlock: document.getElementById('autoBlockToggle'),
+    passportMode: document.getElementById('passportModeToggle'),
+    alwaysLoadComments: document.getElementById('alwaysLoadCommentsToggle')
   };
 
   // Verify critical elements exist
@@ -560,7 +491,7 @@ function init() {
     return;
   }
 
-  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY], (res) => {
+  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, PASSPORT_MODE_KEY, ALWAYS_LOAD_COMMENTS_KEY, STATS_KEY, 'has_rated', 'dismissed_rating'], (res) => {
     // 1. Setup State
     const isEnabled = res[TOGGLE_KEY] !== undefined ? res[TOGGLE_KEY] : DEFAULT_ENABLED;
     updateToggle(isEnabled);
@@ -571,8 +502,24 @@ function init() {
     // Setup new toggles
     if (res[VERIFIED_ONLY_KEY]) els.verifiedOnly.classList.add('enabled');
     if (res[AUTO_BLOCK_KEY]) els.autoBlock.classList.add('enabled');
+    // Default to enabled if not set
+    if (res[PASSPORT_MODE_KEY] !== false) els.passportMode.classList.add('enabled');
+    if (res[ALWAYS_LOAD_COMMENTS_KEY]) els.alwaysLoadComments.classList.add('enabled');
+    
+    // Load stats with backward compatibility
+    const stats = {
+      hiddenPosts: 0,
+      blockedAccounts: 0,
+      seenCountries: {},
+      totalScanned: 0,
+      ...(res[STATS_KEY] || {})
+    };
+    document.getElementById('hiddenPostsCount').textContent = stats.hiddenPosts.toLocaleString();
+    document.getElementById('blockedAccountsCount').textContent = stats.blockedAccounts.toLocaleString();
+    document.getElementById('totalScannedCount').textContent = stats.totalScanned.toLocaleString();
     
     if (res[DEBUG_STORAGE_KEY]) renderDebugUI();
+    initRatingUI(stats, res.has_rated, res.dismissed_rating);
     
     // 2. Setup Listeners
     els.toggle.addEventListener('click', () => {
@@ -603,6 +550,22 @@ function init() {
       });
     });
 
+    els.passportMode.addEventListener('click', () => {
+      const newState = !els.passportMode.classList.contains('enabled');
+      els.passportMode.classList.toggle('enabled', newState);
+      chrome.storage.local.set({ [PASSPORT_MODE_KEY]: newState }, () => {
+        notifyContentScript({ type: 'passportModeUpdate', enabled: newState });
+      });
+    });
+
+    els.alwaysLoadComments.addEventListener('click', () => {
+      const newState = !els.alwaysLoadComments.classList.contains('enabled');
+      els.alwaysLoadComments.classList.toggle('enabled', newState);
+      chrome.storage.local.set({ [ALWAYS_LOAD_COMMENTS_KEY]: newState }, () => {
+        notifyContentScript({ type: 'alwaysLoadCommentsUpdate', enabled: newState });
+      });
+    });
+
     els.select.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!isDropdownLoaded) populateDropdown();
@@ -611,12 +574,33 @@ function init() {
 
     window.addEventListener('click', () => els.select.classList.remove('open'));
     
+    // Dashboard button handler
+    const dashboardBtn = document.getElementById('openDashboard');
+    if (dashboardBtn) {
+      dashboardBtn.addEventListener('click', () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+      });
+    }
+    
+    let clickCount = 0;
+    let clickTimeout = null;
     const headerTitle = document.querySelector('h1');
     if (headerTitle) {
-      headerTitle.addEventListener('click', (e) => {
-        if (e.detail === 5) {
+      headerTitle.addEventListener('click', () => {
+        clickCount++;
+        if (clickTimeout) clearTimeout(clickTimeout);
+        clickTimeout = setTimeout(() => {
+          clickCount = 0;
+        }, 1000);
+
+        if (clickCount === 5) {
+          clickCount = 0;
           chrome.storage.local.get(DEBUG_STORAGE_KEY, (curr) => {
-             chrome.storage.local.set({ [DEBUG_STORAGE_KEY]: !curr[DEBUG_STORAGE_KEY] }, () => location.reload());
+            const newDebug = !curr[DEBUG_STORAGE_KEY];
+            const updates = { [DEBUG_STORAGE_KEY]: newDebug };
+            // Reset dev data source when debug mode is turned off
+            if (!newDebug) updates[DEV_DATA_SOURCE_KEY] = 'auto';
+            chrome.storage.local.set(updates, () => location.reload());
           });
         }
       });
@@ -628,6 +612,7 @@ function init() {
       initUpdateCheck();
       initFeedbackUI();
       initWelcomeScreen();
+      initKofiModal();
     }, 50);
   });
 }
@@ -639,7 +624,7 @@ async function initUpdateCheck() {
   if (manifest.update_url) return; // Disables check for Store installs
 
   try {
-    const res = await fetch('https://raw.githubusercontent.com/incconutwo/twitter-account-location-in-username/main/firefox/manifest.json');
+    const res = await fetch('https://raw.githubusercontent.com/incconutwo/twitter-account-location-in-username/main/chrome/manifest.json');
     if (res.ok) {
       const data = await res.json();
       if (isNewerVersion(data.version, manifest.version)) {
@@ -669,11 +654,13 @@ function showUpdateBanner(version) {
   if (document.querySelector('.update-banner')) return;
   const banner = document.createElement('div');
   banner.className = 'update-banner';
-  banner.innerHTML = `<span>🚀 Update ${version} available</span><a href="${REPO_URL}" target="_blank">Get it</a>`;
-  
-  banner.style.cssText = `background:#e1f5fe;border:1px solid #b3e5fc;color:#0277bd;padding:10px;border-radius:8px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;animation:slideIn 0.3s;font-size:13px;`;
-  const link = banner.querySelector('a');
-  link.style.cssText = `color:#0277bd;font-weight:700;margin-left:8px;text-decoration:none;`;
+  const span = document.createElement('span');
+  span.textContent = `🚀 Update ${version} available`;
+  const link = document.createElement('a');
+  link.href = REPO_URL; link.target = '_blank'; link.textContent = 'Get it';
+  link.style.cssText = 'color:#0277bd;font-weight:700;margin-left:8px;text-decoration:none;';
+  banner.append(span, link);
+  banner.style.cssText = 'background:#e1f5fe;border:1px solid #b3e5fc;color:#0277bd;padding:10px;border-radius:8px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;animation:slideIn 0.3s;font-size:13px;';
   
   const header = document.querySelector('.header');
   if (header) header.parentNode.insertBefore(banner, header.nextSibling);
@@ -683,38 +670,37 @@ function showFullScreenUpdate(version) {
   if (document.querySelector('.update-modal')) return;
   const modal = document.createElement('div');
   modal.className = 'update-modal';
-  modal.innerHTML = `<h2>Update Available</h2><p>A new version <b>${version}</b> is ready.</p><a href="${REPO_URL}" target="_blank" class="update-modal-btn">Get Update</a><button class="update-dismiss">Remind me later</button>`;
-  
+  const h2 = document.createElement('h2'); h2.textContent = 'Update Available';
+  const p = document.createElement('p'); p.textContent = `A new version ${version} is ready.`;
+  const a = document.createElement('a'); a.href = REPO_URL; a.target = '_blank';
+  a.className = 'update-modal-btn'; a.textContent = 'Get Update';
+  const btn = document.createElement('button'); btn.className = 'update-dismiss';
+  btn.textContent = 'Remind me later';
+  btn.onclick = () => { chrome.storage.local.set({ 'dismissed_update_version': version }); modal.remove(); showUpdateBanner(version); };
+  modal.append(h2, p, a, btn);
+
   const style = document.createElement('style');
   style.textContent = `.update-modal{position:fixed;top:0;left:0;width:100%;height:100%;background:#fff;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;box-sizing:border-box}.update-modal h2{margin:0 0 12px;font-size:18px}.update-modal-btn{background:#1d9bf0;color:#fff;border:none;padding:10px 24px;border-radius:99px;font-weight:700;text-decoration:none;margin-bottom:16px;cursor:pointer;display:inline-block}.update-dismiss{background:none;border:none;color:#536471;cursor:pointer;font-size:13px}@media(prefers-color-scheme:dark){.update-modal{background:#15202b;color:#f7f9f9}.update-dismiss{color:#8b98a5}}`;
   document.head.appendChild(style);
-
-  modal.querySelector('.update-dismiss').onclick = () => {
-    chrome.storage.local.set({ 'dismissed_update_version': version });
-    modal.remove();
-    showUpdateBanner(version);
-  };
   document.body.appendChild(modal);
 }
 
 // --- Welcome Screen (First Time) ---
 function initWelcomeScreen() {
+  const welcomeModal = document.getElementById('welcomeModal');
+  const closeBtn = document.getElementById('closeWelcomeModal');
+
+  if (!welcomeModal || !closeBtn) return;
+
+  // Always attach the listener so Developer Mode works
+  closeBtn.addEventListener('click', () => {
+    welcomeModal.hidden = true;
+    chrome.storage.local.set({ [HAS_SEEN_WELCOME_KEY]: true });
+  });
+
   chrome.storage.local.get(HAS_SEEN_WELCOME_KEY, (res) => {
     if (res[HAS_SEEN_WELCOME_KEY]) return; // Already seen
-
-    const welcomeModal = document.getElementById('welcomeModal');
-    const closeBtn = document.getElementById('closeWelcomeModal');
-
-    if (!welcomeModal || !closeBtn) return;
-
-    // Show welcome modal
     welcomeModal.hidden = false;
-
-    // Close handler
-    closeBtn.addEventListener('click', () => {
-      welcomeModal.hidden = true;
-      chrome.storage.local.set({ [HAS_SEEN_WELCOME_KEY]: true });
-    });
   });
 }
 
@@ -802,6 +788,129 @@ function initFeedbackUI() {
     } finally {
       sendFeedback.disabled = false;
       sendFeedback.textContent = 'Send Feedback';
+    }
+  });
+}
+
+
+// --- Ko-fi Modal ---
+function initKofiModal() {
+  const kofiTrigger = document.getElementById('kofiTrigger');
+  const kofiModal = document.getElementById('kofiModal');
+  const closeKofiModal = document.getElementById('closeKofiModal');
+
+  if (!kofiTrigger || !kofiModal || !closeKofiModal) return;
+
+  kofiTrigger.addEventListener('click', () => {
+    kofiModal.hidden = false;
+  });
+
+  closeKofiModal.addEventListener('click', () => {
+    kofiModal.hidden = true;
+  });
+
+  // Close modal when clicking outside the content
+  kofiModal.addEventListener('click', (e) => {
+    if (e.target === kofiModal) {
+      kofiModal.hidden = true;
+    }
+  });
+}
+
+// --- Rating System ---
+function initRatingUI(stats, hasRated, dismissedRating) {
+  const widget = document.getElementById('ratingWidget');
+  const closeBtn = document.getElementById('closeRatingWidget');
+  const starsContainer = document.getElementById('ratingStars');
+  const feedbackBox = document.getElementById('ratingFeedbackBox');
+  const commentInput = document.getElementById('ratingComment');
+  const submitBtn = document.getElementById('submitRating');
+  const statusEl = document.getElementById('ratingStatus');
+
+  if (!widget || !starsContainer) return;
+
+  let selectedRating = 0;
+
+  // Show widget if eligible
+  if (stats.totalScanned >= 500 && !hasRated && !dismissedRating) {
+    widget.hidden = false;
+  }
+
+  // Handle Close / Dismiss
+  closeBtn?.addEventListener('click', () => {
+    widget.hidden = true;
+    chrome.storage.local.set({ dismissed_rating: true });
+  });
+
+  // Handle Stars interaction
+  const stars = starsContainer.querySelectorAll('.star');
+  
+  stars.forEach((star, index) => {
+    // Mouse enter highlights stars up to current
+    star.addEventListener('mouseenter', () => {
+      stars.forEach((s, idx) => {
+        s.classList.toggle('selected', idx <= index);
+      });
+    });
+
+    // Click sets rating and shows feedback comment section
+    star.addEventListener('click', () => {
+      selectedRating = index + 1;
+      stars.forEach((s, idx) => {
+        s.classList.toggle('selected', idx < selectedRating);
+      });
+      if (feedbackBox) feedbackBox.hidden = false;
+    });
+  });
+
+  // Revert to selected rating when mouse leaves stars container
+  starsContainer.addEventListener('mouseleave', () => {
+    stars.forEach((s, idx) => {
+      s.classList.toggle('selected', idx < selectedRating);
+    });
+  });
+
+  // Submit handler
+  submitBtn?.addEventListener('click', async () => {
+    if (selectedRating === 0) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+    if (statusEl) statusEl.hidden = true;
+
+    try {
+      const response = await fetch(FEEDBACK_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rating: selectedRating,
+          message: commentInput?.value.trim() || null,
+          version: chrome.runtime.getManifest().version
+        })
+      });
+
+      if (response.ok) {
+        if (statusEl) {
+          statusEl.textContent = 'Thank you for your rating! ❤️';
+          statusEl.className = 'rating-status success';
+          statusEl.hidden = false;
+        }
+        chrome.storage.local.set({ has_rated: true });
+        setTimeout(() => {
+          widget.hidden = true;
+        }, 1500);
+      } else {
+        throw new Error('Server Error');
+      }
+    } catch (err) {
+      console.error(err);
+      if (statusEl) {
+        statusEl.textContent = 'Failed to submit. Please try again.';
+        statusEl.className = 'rating-status error';
+        statusEl.hidden = false;
+      }
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Rating';
     }
   });
 }

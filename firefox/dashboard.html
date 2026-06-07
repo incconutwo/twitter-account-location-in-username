@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feed Geography Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="dashboard-header">
+    <div class="header-content">
+      <div class="header-left">
+        <span class="header-icon">🌍</span>
+        <div class="header-text">
+          <h1>Feed Geography</h1>
+          <p class="header-subtitle">Your Twitter Timeline Around the World</p>
+        </div>
+      </div>
+      <div class="header-stats">
+        <div class="header-stat">
+          <span class="header-stat-value" id="totalUsers">0</span>
+          <span class="header-stat-label">Users Scanned</span>
+        </div>
+        <div class="header-stat">
+          <div class="countries-stat-top" style="display: flex; align-items: center; gap: 8px;">
+            <span class="header-stat-value" id="totalCountries"><span id="totalCountriesCount">0</span><span class="stat-total">/195</span></span>
+            <div class="header-progress-bar" style="width: 80px; height: 6px; background: var(--bg-primary); border-radius: 3px; overflow: hidden; margin-top: 4px;">
+              <div class="header-progress-fill" id="goalProgressFill" style="height: 100%; background: linear-gradient(90deg, var(--accent-primary), #00ba7c); border-radius: 3px; width: 0%; transition: width 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);"></div>
+            </div>
+            <span class="goal-percentage" id="goalPercentage" style="font-size: 14px; font-weight: 700; color: var(--accent-primary); margin-top: 4px;">0%</span>
+          </div>
+          <span class="header-stat-label">Countries Discovered</span>
+        </div>
+        <div class="header-stat">
+           <button id="shareBtn" class="share-btn">Share on X 🐦</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="dashboard-main">
+    <!-- World Map Section -->
+    <section class="map-section">
+      <div class="map-container" id="mapContainer">
+        <!-- SVG Map will be loaded here -->
+        <div class="map-loading" id="mapLoading">
+          <div class="loading-spinner"></div>
+          <span>Loading map...</span>
+        </div>
+      </div>
+      
+      <!-- Map Tooltip -->
+      <div class="map-tooltip" id="mapTooltip" hidden>
+        <div class="tooltip-content">
+          <span class="tooltip-flag" id="tooltipFlag"></span>
+          <span class="tooltip-country" id="tooltipCountry"></span>
+          <span class="tooltip-count" id="tooltipCount"></span>
+        </div>
+      </div>
+      
+      <!-- Heat Map Legend -->
+      <div class="map-legend">
+        <div class="legend-colors">
+          <span class="legend-label">Fewer users</span>
+          <div class="legend-gradient"></div>
+          <span class="legend-label">More users</span>
+        </div>
+        <p class="legend-hint">Hover over colored countries to see user counts</p>
+      </div>
+    </section>
+
+    <!-- Sidebar: Top Countries -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title-group">
+          <h2>Top Countries</h2>
+          <span class="sidebar-subtitle">on your feed</span>
+        </div>
+        <button id="resetBtn" class="reset-btn" title="Clear all spotted locations">Reset Data</button>
+      </div>
+
+      
+      <div class="country-list" id="countryList">
+        <!-- Countries will be populated by JS -->
+      </div>
+      
+      <!-- Empty State -->
+      <div class="empty-state" id="emptyState" hidden>
+        <div class="empty-icon">📭</div>
+        <h3>No data yet</h3>
+        <p>Browse your Twitter feed to start tracking countries.</p>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Footer -->
+  <footer class="dashboard-footer">
+    <p>Data collected locally • <a href="https://github.com/incconutwo/twitter-account-location-in-username" target="_blank">⭐ Star on GitHub</a></p>
+  </footer>
+
+  <!-- Reset Confirmation Modal -->
+  <div id="resetModal" class="modal-overlay" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-icon">⚠️</div>
+        <h2>Reset All Data?</h2>
+      </div>
+      <div class="modal-body">
+        <p>This will permanently clear all your spotted locations, scanned counts, and map data. This action cannot be undone.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelReset" class="btn-secondary">Cancel</button>
+        <button id="confirmReset" class="btn-danger">Clear Everything</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Changelog Modal (First Time on Update) -->
+  <div id="changelogModal" class="modal-overlay" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-content changelog-modal-content">
+      <div class="modal-header">
+        <div class="modal-icon">🌍</div>
+        <h2>Update: Location Flag & Blocker (v1.2.0)</h2>
+      </div>
+      <div class="modal-body changelog-body">
+        <p class="changelog-intro">We've introduced several updates to improve your experience and provide more context while you browse:</p>
+        
+        <div class="changelog-grid">
+          <div class="changelog-item">
+            <span class="changelog-emoji">📊</span>
+            <div class="changelog-text">
+              <strong>Feed Geography Dashboard</strong>
+              Visualize your timeline’s global demographics on a hover-interactive world map. Open your extension popup and click "Open Feed Dashboard" to see your stats!
+              <div class="changelog-image-wrapper">
+                <img src="images/Feed-dashboard.png" alt="Feed Geography Dashboard Preview" class="changelog-preview-img">
+              </div>
+            </div>
+          </div>
+
+          <div class="changelog-item">
+            <span class="changelog-emoji">🕒</span>
+            <div class="changelog-text">
+              <strong>Local Time & Night indicator</strong>
+              The extension now resolves timezones to show localized clocks. If it is currently night-time (10:00 PM – 6:00 AM) where a user is located, a moon emoji (🌙) will appear next to their clock.
+              <div class="changelog-image-wrapper">
+                <img src="images/LocalTimeNightindicator.png" alt="Local Time & Night Indicator Preview" class="changelog-preview-img">
+              </div>
+            </div>
+          </div>
+
+          <div class="changelog-item">
+            <span class="changelog-emoji">⚠️</span>
+            <div class="changelog-text">
+              <strong>Approximate Location Warnings</strong>
+              When profile metadata indicates a broad regional location rather than an accurate city or coordinate, a warning icon (⚠️) will appear next to the flag to provide proper context.
+            </div>
+          </div>
+
+          <div class="changelog-item">
+            <span class="changelog-emoji">🛂</span>
+            <div class="changelog-text">
+              <strong>Discovery Passport & Milestones</strong>
+              Track your global reach with real-time notification toasts as you encounter users from new countries, and celebrate milestones as you keep your feed clean.
+              <div class="changelog-image-wrapper">
+                <img src="images/Discovery Passport & Milestones.png" alt="Discovery Passport & Milestones Preview" class="changelog-preview-img">
+              </div>
+            </div>
+          </div>
+
+          <div class="changelog-item">
+            <span class="changelog-emoji">⚡</span>
+            <div class="changelog-text">
+              <strong>Passive Performance Engine</strong>
+              Powered by a new IndexedDB caching layer and passive background scanning, the extension reads timeline data as you scroll, reducing active API requests to keep your browser running fast.
+            </div>
+          </div>
+        </div>
+        
+        <p class="changelog-outro">Enjoying these updates? Consider leaving a review on the store or supporting the community database on Ko-fi!</p>
+
+        <div class="modal-footer changelog-footer" style="margin-top: 20px;">
+          <a href="https://chromewebstore.google.com/detail/xtwitter-country-flags-bl/dgodabjkaifjlhpcapiohikkklnailla/reviews?hl=en&authuser=0" target="_blank" class="review-btn-link">⭐ Leave a review</a>
+          <button id="closeChangelog" class="btn-secondary">Dismiss</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="countryFlags.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>
