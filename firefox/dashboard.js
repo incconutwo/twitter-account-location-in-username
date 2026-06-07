@@ -26,6 +26,8 @@ const els = {
 // Convert Flag Emoji to ISO 2-letter code (e.g. 🇺🇸 -> US)
 function getIsoCodeFromEmoji(emoji) {
   if (!emoji) return null;
+  // Group UK subdivision flags into the United Kingdom ISO code
+  if (["🏴󠁧󠁢󠁥󠁮󠁧󠁿", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "🏴󠁧󠁢󠁷󠁬󠁳󠁿"].includes(emoji)) return "GB";
   const chars = Array.from(emoji);
   if (chars.length !== 2) return null;
   
@@ -35,12 +37,7 @@ function getIsoCodeFromEmoji(emoji) {
   return String.fromCharCode(c1) + String.fromCharCode(c2);
 }
 
-// Get Twemoji URL (reuse logic from popup)
-function getTwemojiUrl(emoji) {
-  if (!emoji) return '';
-  const hex = Array.from(emoji).map(c => c.codePointAt(0).toString(16)).join('-');
-  return `https://abs-0.twimg.com/emoji/v2/svg/${hex}.svg`;
-}
+
 
 function formatCount(num) {
   return new Intl.NumberFormat().format(num);
@@ -51,11 +48,20 @@ function formatCount(num) {
 async function loadAndRenderMap(countryCounts) {
   try {
     // Load SVG map from local file
-    const res = await fetch(browser.runtime.getURL('world-map.svg'));
+    const mapUrl = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL)
+      ? chrome.runtime.getURL('world-map.svg')
+      : 'world-map.svg';
+    const res = await fetch(mapUrl);
     if (!res.ok) throw new Error('Failed to load map');
     
     const svgText = await res.text();
-    els.mapContainer.innerHTML = svgText;
+    const parser = new DOMParser();
+    const parsedDoc = parser.parseFromString(svgText, 'image/svg+xml');
+    const svgElement = parsedDoc.documentElement;
+    if (svgElement.querySelector('parsererror')) {
+      throw new Error('SVG parsing failed');
+    }
+    els.mapContainer.replaceChildren(svgElement);
     
     // Process map interaction
     const svg = els.mapContainer.querySelector('svg');
@@ -115,14 +121,23 @@ async function loadAndRenderMap(countryCounts) {
     svg.addEventListener('mouseleave', hideTooltip);
     
   } catch (e) {
-    els.mapContainer.innerHTML = `<div class="map-error">Failed to load map: ${e.message}</div>`;
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'map-error';
+    errorDiv.textContent = `Failed to load map: ${e.message}`;
+    els.mapContainer.replaceChildren(errorDiv);
   }
 }
 
 function showTooltip(e, country, flag, count) {
   els.tooltip.hidden = false;
   // Use Twemoji image instead of text flag mainly for Windows support
-  els.tooltipFlag.innerHTML = `<img src="${getTwemojiUrl(flag)}" alt="${flag}" style="width:1.5em; height:auto; display:block;">`;
+  const tooltipImg = document.createElement('img');
+  tooltipImg.src = getTwemojiUrl(flag);
+  tooltipImg.alt = flag;
+  tooltipImg.style.width = '1.5em';
+  tooltipImg.style.height = 'auto';
+  tooltipImg.style.display = 'block';
+  els.tooltipFlag.replaceChildren(tooltipImg);
   els.tooltipCountry.textContent = country;
   els.tooltipCount.textContent = `${formatCount(parseInt(count))} users`;
   
@@ -175,22 +190,75 @@ function renderCountryList(sortedData) {
     // Bar width percentage
     const barWidth = (item.count / maxCount) * 100;
     
-    div.innerHTML = `
-      <div class="${rankClass}">#${index + 1}</div>
-      <div class="country-flag">
-        <img src="${getTwemojiUrl(item.flag)}" alt="${item.flag}" loading="lazy">
-      </div>
-      <div class="country-info">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span class="country-name">${item.country}</span>
-          <span class="country-count">${formatCount(item.count)}</span>
-        </div>
-        <div class="country-bar">
-          <div class="country-bar-fill" style="width: ${barWidth}%"></div>
-        </div>
-      </div>
-    `;
+    const rankDiv = document.createElement('div');
+    rankDiv.className = rankClass;
+    rankDiv.textContent = `#${index + 1}`;
+    div.appendChild(rankDiv);
+
+    const flagDiv = document.createElement('div');
+    flagDiv.className = 'country-flag';
+    const flagImg = document.createElement('img');
+    flagImg.src = getTwemojiUrl(item.flag);
+    flagImg.alt = item.flag;
+    flagImg.loading = 'lazy';
+    flagDiv.appendChild(flagImg);
+    div.appendChild(flagDiv);
+
+    const infoDiv = document.createElement('div');
+    infoDiv.className = 'country-info';
+
+    const flexDiv = document.createElement('div');
+    flexDiv.style.display = 'flex';
+    flexDiv.style.justifyContent = 'space-between';
+    flexDiv.style.alignItems = 'center';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'country-name';
+    nameSpan.textContent = item.country;
+    flexDiv.appendChild(nameSpan);
+
+    const countSpan = document.createElement('span');
+    countSpan.className = 'country-count';
+    countSpan.textContent = formatCount(item.count);
+    flexDiv.appendChild(countSpan);
+
+    infoDiv.appendChild(flexDiv);
+
+    const barDiv = document.createElement('div');
+    barDiv.className = 'country-bar';
+    const barFill = document.createElement('div');
+    barFill.className = 'country-bar-fill';
+    barFill.style.width = `${barWidth}%`;
+    barDiv.appendChild(barFill);
+    infoDiv.appendChild(barDiv);
+
+    div.appendChild(infoDiv);
     
+    // Add hover highlighting link to map
+    const iso = getIsoCodeFromEmoji(item.flag);
+    if (iso) {
+      const isoLower = iso.toLowerCase();
+      div.dataset.iso = isoLower;
+      
+      div.addEventListener('mouseenter', () => {
+        const svg = els.mapContainer.querySelector('svg');
+        if (!svg) return;
+        const element = svg.getElementById(isoLower);
+        if (element) {
+          element.classList.add('hovered');
+        }
+      });
+      
+      div.addEventListener('mouseleave', () => {
+        const svg = els.mapContainer.querySelector('svg');
+        if (!svg) return;
+        const element = svg.getElementById(isoLower);
+        if (element) {
+          element.classList.remove('hovered');
+        }
+      });
+    }
+
     fragment.appendChild(div);
   });
   
@@ -206,7 +274,7 @@ function setupShareButton(totalScanned, countryArray, totalCountries) {
   btn.addEventListener('click', () => {
     const top3 = countryArray.slice(0, 3).map((c, i) => `${i+1}. ${c.flag} ${c.country}: ${formatCount(c.count)}`).join('\n');
     
-    const text = `My Twitter Feed Geography 🌍\nI've spotted users from ${totalCountries} countries on my feed so far!\n\nTop locations:\n${top3}\n\nTrack yours: https://github.com/incconutwo/twitter-account-location-in-username\n\n#TwitterGeography #OpenSource`;
+    const text = `My X Feed Geography 🌍\nI've spotted users from ${totalCountries} countries on my feed so far!\n\nTop locations:\n${top3}\n\nTrack yours: https://chromewebstore.google.com/detail/xtwitter-country-flags-bl/dgodabjkaifjlhpcapiohikkklnailla\n\n#TwitterGeography #OpenSource`;
     
     const url = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text);
     const width = 600;
@@ -231,9 +299,13 @@ function setupResetButton() {
   });
 
   els.confirmResetBtn.addEventListener('click', () => {
-    browser.storage.local.set({ [STATS_KEY]: { seenCountries: {}, totalScanned: 0 } }, () => {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ [STATS_KEY]: { seenCountries: {}, totalScanned: 0 } }, () => {
+        window.location.reload();
+      });
+    } else {
       window.location.reload();
-    });
+    }
   });
 
   // Close on backdrop click
@@ -242,10 +314,45 @@ function setupResetButton() {
   });
 }
 
+function setupChangelogModal() {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('update') === 'true') {
+    const changelogModal = document.getElementById('changelogModal');
+    if (changelogModal) {
+      changelogModal.hidden = false;
+      
+      const closeBtn = document.getElementById('closeChangelog');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+          changelogModal.hidden = true;
+        });
+      }
+    }
+  }
+}
+
 async function init() {
   // Load data
-  const res = await browser.storage.local.get(STATS_KEY);
-  const stats = res[STATS_KEY] || { seenCountries: {}, totalScanned: 0 };
+  let stats = { seenCountries: {}, totalScanned: 0 };
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    const res = await chrome.storage.local.get(STATS_KEY);
+    stats = res[STATS_KEY] || stats;
+  } else {
+    // Mock data for local development/testing
+    stats = {
+      seenCountries: {
+        'United States': 142,
+        'United Kingdom': 88,
+        'Japan': 45,
+        'Germany': 31,
+        'Canada': 18,
+        'France': 12,
+        'Australia': 9,
+        'Brazil': 7
+      },
+      totalScanned: 352
+    };
+  }
   
   const seenCountries = stats.seenCountries || {};
   const totalScanned = stats.totalScanned || 0;
@@ -270,6 +377,22 @@ async function init() {
   renderCountryList(countryArray);
   setupShareButton(totalScanned, countryArray, Object.keys(seenCountries).length);
   setupResetButton();
+  setupChangelogModal();
+
+  // Animate Global Exploration Progress
+  const goalPercentage = document.getElementById('goalPercentage');
+  const goalProgressFill = document.getElementById('goalProgressFill');
+  
+  if (goalPercentage && goalProgressFill) {
+    const pct = Math.min(100, Math.round((countryArray.length / 195) * 100));
+    goalPercentage.textContent = `${pct}%`;
+    
+    // Set a very slight delay so the transition triggers and animates from 0%
+    setTimeout(() => {
+      goalProgressFill.style.width = `${pct}%`;
+    }, 100);
+  }
+
   await loadAndRenderMap(seenCountries);
 }
 

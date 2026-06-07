@@ -1,790 +1,1215 @@
-const CLOUD_API_URL = 'https://twitter-countries-api.tnemoroccan.workers.dev';
-const CACHE_KEY = 'twitter_location_cache';
-const CACHE_EXPIRY_DAYS = 30;
-const CACHE_STALE_DAYS = 90;
-const CACHE_EXPIRY_NO_LOC = 14;
-const MAX_CACHE_SIZE = 5000;
-const BATCH_SIZE = 50;
+// ─────────────────────────────────────────────────────────────
+//  Config
+// ─────────────────────────────────────────────────────────────
+const API_ENDPOINT = 'https://twitter-countries-api.tnemoroccan.workers.dev';
+const EXPIRY_DAYS       = 30;
+const STALE_WINDOW_DAYS = 90;
+const EXPIRY_EMPTY_DAYS = 14;
+const STORE_LIMIT       = 5000;
+const MEMORY_CACHE_LIMIT = 500;
+const CLOUD_BATCH_MAX   = 50;
+const MISS_TTL          = 1800_000;      // 30 min cooldown for failed/not found users
+const DRAIN_INTERVAL    = 60;            // ms – micro-batch MutationObserver events
+const TWITTER_PARALLEL  = 1;
+const TWITTER_STAGGER_MS = 3000; // Paced delay between Twitter lookup batches to prevent 429 rate limits
+const LAZY_DELAY_MS     = 400;  // Debounce: ignore elements scrolled past quickly
+const SUBMIT_FLUSH_MS   = 30_000;        // auto-flush cloud submissions
+const CLOCK_TICK_MS     = 60_000;        // local-time refresh interval
+const COUNTRY_TOTAL     = 195;
+const NEGATIVE_MAP_CAP  = 2000;          // max negative cache entries
+const CLOUD_BACKOFF_BASE = 1000;         // base backoff ms for cloud failures
+const CLOUD_BACKOFF_MAX  = 60_000;       // max backoff ms
 
-// Update: Aggressive prefetching range (was 1000px)
-const PREFETCH_MARGIN = '4000px'; 
+const ELEMENT_SELECTORS =
+  'article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="User-Names"], [data-testid="User-Name"]';
 
-// State
-let locationCache = new Map();
-let submissionHistory = new Set();
-let hasUnsavedChanges = false;
-let saveCacheTimer = null;
-let writeBuffer = [];
-let writeTimer = null;
-let cloudQueueTimer = null;
+// ─────────────────────────────────────────────────────────────
+//  State
+// ─────────────────────────────────────────────────────────────
+let enabled         = true;
+let filteredRegions = [];
+let onlyVerified    = false;
+let autoFilter      = false;
+let discoveryOn     = true;
+let devDataSource   = 'auto';
+let devShowSourceBanner = false;
+let alwaysLoadComments = false;
+let rateLimitUntil  = 0;
 
-const cloudQueue = [];
-const twitterQueue = [];
-const queuedUsernames = new Set();
-const submittedSessionCache = new Set();
+// Queues / flags
+let cloudBusy       = false;
+let twitterBusy     = false;
+let cloudBatchTimer = null;
+let cloudFailCount  = 0;               // consecutive cloud failures for backoff
+let cloudBackoffUntil = 0;             // timestamp until which cloud requests are paused
 
-let extensionEnabled = true;
-let blockedCountries = [];
-let verifiedOnlyMode = false;
-let autoBlockMode = false;
-let passportMode = true; // Toggle for discovery notifications
-let devDataSource = 'auto';
-let isProcessingCloud = false;
-let isProcessingTwitter = false;
-let rateLimitResetTime = 0;
+const dataMap          = new Map();  // screenName → { location, verified, timezone, expiry }
+const negativeMap      = new Map();  // screenName → expiryTs
+const flightMap        = new Map();  // screenName → Promise  (dedup concurrent fetches)
+const cloudPending     = [];         // { screenName, resolve, reject }
+const twitterPending   = [];         // { screenName, resolve, reject }
+const submitBuffer     = [];
+let   submitTimer      = null;
+const submittedSession = new Set();
+let   submittedHistory = new Set();
+let   watcherRef       = null;       // MutationObserver handle
 
-// Stats tracking (now primarily managed in background.js)
-const STATS_KEY = 'extension_stats';
-const TOTAL_COUNTRIES = 195; // UN recognized countries
+// Visibility queue
+let   watched    = new WeakSet();
+const lazyTimers = new WeakMap();  // element → setTimeout id (scroll debounce)
+const viewport   = new IntersectionObserver(onVisible, { rootMargin: '50px 0px 200px 0px' });
 
-// Toast notification state
-let toastStylesInjected = false;
-let discoveryQueue = [];
-let isToastActive = false;
+// Toast
+let toastCSSReady = false;
+let toastQueue    = [];
+let toastBusy     = false;
 
-// Observers
-let observer = null;
-const processingUsernames = new Set();
+let milestoneToastQueue = [];
+let milestoneToastBusy  = false;
 
-// Selectors
-const TARGET_SELECTORS = 'article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="User-Names"], [data-testid="User-Name"]';
+// Tooltip
+let tip = null;
 
-// --- Utils ---
+// ─────────────────────────────────────────────────────────────
+//  Storage adapter (Chrome / Firefox)
+// ─────────────────────────────────────────────────────────────
+function gone() { return !chrome.runtime?.id; }
 
-function isContextInvalid() {
-  return !chrome.runtime?.id;
+async function fetchWithTimeout(resource, options = {}) {
+  const { timeout = 8000, ...rest } = options;
+  return fetch(resource, { ...rest, signal: AbortSignal.timeout(timeout) });
 }
 
-const storage = {
-  get: (keys) => new Promise(resolve => {
-    if (isContextInvalid()) return resolve({});
-    if (typeof browser !== 'undefined' && browser.storage) {
-      browser.storage.local.get(keys).then(resolve);
-    } else {
-      chrome.storage.local.get(keys, resolve);
-    }
-  }),
-  set: (data) => new Promise(resolve => {
-    if (isContextInvalid()) return resolve();
-    if (typeof browser !== 'undefined' && browser.storage) {
-      browser.storage.local.set(data).then(resolve);
-    } else {
-      chrome.storage.local.set(data, resolve);
-    }
-  })
+const storage = typeof browser !== 'undefined' ? browser.storage.local : chrome.storage.local;
+const disk = {
+  read: async (keys) => gone() ? {} : storage.get(keys),
+  write: async (obj) => { if (!gone()) await storage.set(obj); }
 };
 
-// getTwemojiUrl is now in countryFlags.js with pre-cached URLs
+// ─────────────────────────────────────────────────────────────
+//  DataStore — cache, eviction, disk flush, cloud submit
+// ─────────────────────────────────────────────────────────────
+// IndexedDB Cache Wrapper
+const DB_NAME = 'TwitterLocationCacheDB';
+const STORE_NAME = 'locations';
+const DB_VERSION = 1;
 
-// --- Init & Settings ---
+let dbInstance = null;
 
-async function loadSettings() {
-  try {
-    // Request settings from background.js (centralized, avoids redundant storage reads)
-    const settings = await new Promise((resolve) => {
-      if (isContextInvalid()) return resolve({});
-      chrome.runtime.sendMessage({ type: 'getSettings' }, (response) => {
-        if (chrome.runtime.lastError) {
-          resolve({});
-        } else {
-          resolve(response || {});
-        }
-      });
-    });
-    
-    extensionEnabled = settings.extension_enabled ?? true;
-    verifiedOnlyMode = settings.verified_only_mode ?? false;
-    autoBlockMode = settings.auto_block_mode ?? false;
-    passportMode = settings.passport_mode ?? true;
-    devDataSource = settings.dev_data_source || 'auto';
-    if (settings.blocked_countries) {
-      updateBlockedCountries(settings.blocked_countries);
-    }
-    
-    
-    // Still need to load submission_history from local storage (per-tab data)
-    const localData = await storage.get(['submission_history']);
-    submissionHistory = new Set(localData.submission_history || []);
-  } catch (e) {}
-}
-
-function incrementStat(statType) {
-  if (isContextInvalid()) return;
-  chrome.runtime.sendMessage({ type: 'incrementStat', statType });
-}
-
-function trackCountry(countryName, flag) {
-  if (!countryName || !flag || isContextInvalid()) return;
-  chrome.runtime.sendMessage({ type: 'countrySpotted', country: countryName, flag });
-}
-
-function injectToastStyles() {
-  if (toastStylesInjected) return;
-  toastStylesInjected = true;
-  
-  const style = document.createElement('style');
-  style.textContent = `
-    @keyframes tf-toast-slide-in {
-      from { transform: translateY(-120%); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-    @keyframes tf-toast-slide-out {
-      from { transform: translateY(0); opacity: 1; }
-      to { transform: translateY(-120%); opacity: 0; }
-    }
-    .tf-discovery-toast {
-      position: fixed;
-      top: 24px;
-      right: 24px;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      border: 1px solid rgba(29, 155, 240, 0.3);
-      border-radius: 16px;
-      padding: 16px 20px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
-      z-index: 9999999;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      animation: tf-toast-slide-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-      backdrop-filter: blur(12px);
-      min-width: 280px;
-    }
-    .tf-discovery-toast.tf-toast-exit {
-      animation: tf-toast-slide-out 0.3s ease-in forwards;
-    }
-    .tf-toast-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 8px;
-      color: #1d9bf0;
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .tf-toast-sparkle {
-      font-size: 14px;
-    }
-    .tf-toast-country {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 10px;
-    }
-    .tf-toast-flag {
-      font-size: 36px;
-      line-height: 1;
-      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
-    }
-    .tf-toast-name {
-      color: #e7e9ea;
-      font-size: 18px;
-      font-weight: 700;
-      letter-spacing: -0.2px;
-    }
-    .tf-toast-progress {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .tf-toast-progress-bar {
-      flex: 1;
-      height: 6px;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 3px;
-      overflow: hidden;
-    }
-    .tf-toast-progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #1d9bf0, #1da1f2);
-      border-radius: 3px;
-      transition: width 0.3s ease;
-    }
-    .tf-toast-progress-text {
-      color: #71767b;
-      font-size: 13px;
-      font-weight: 500;
-      min-width: 55px;
-      text-align: right;
-    }
-  `;
-  document.head.appendChild(style);
-}
-
-function processDiscoveryQueue() {
-  if (isToastActive || discoveryQueue.length === 0) return;
-  
-  isToastActive = true;
-  const item = discoveryQueue.shift();
-  showDiscoveryToast(item.countryName, item.flag, item.discoveredCount, item.total);
-}
-
-function showDiscoveryToast(countryName, flag, current, total) {
-  injectToastStyles();
-  
-  // Remove any existing toast
-  const existing = document.querySelector('.tf-discovery-toast');
-  if (existing) existing.remove();
-  
-  const percentage = Math.round((current / total) * 100);
-  const flagUrl = typeof getTwemojiUrl === 'function' ? getTwemojiUrl(flag) : null;
-  
-  const toast = document.createElement('div');
-  toast.className = 'tf-discovery-toast';
-  toast.innerHTML = `
-    <div class="tf-toast-header">
-      <span class="tf-toast-sparkle">✨</span>
-      <span>New Country Discovered!</span>
-    </div>
-    <div class="tf-toast-country">
-      <div class="tf-toast-flag">
-        ${flagUrl ? `<img src="${flagUrl}" alt="${flag}" style="width:1em; height:1em; display:block;">` : flag}
-      </div>
-      <span class="tf-toast-name">${countryName}</span>
-    </div>
-    <div class="tf-toast-progress">
-      <div class="tf-toast-progress-bar">
-        <div class="tf-toast-progress-fill" style="width: ${percentage}%"></div>
-      </div>
-      <span class="tf-toast-progress-text">${current}/${total}</span>
-    </div>
-  `;
-  
-  document.body.appendChild(toast);
-  
-  // Auto-dismiss after 4 seconds, then wait 1s before next one (total 5s minimum per discovery)
-  setTimeout(() => {
-    toast.classList.add('tf-toast-exit');
-    setTimeout(() => {
-      toast.remove();
-      isToastActive = false;
-      // Small delay before next toast to feel less frantic
-      setTimeout(processDiscoveryQueue, 1000);
-    }, 300);
-  }, 4000);
-}
-
-function updateBlockedCountries(input) {
-  if (!input) blockedCountries = [];
-  else if (Array.isArray(input)) blockedCountries = input.map(s => s.toLowerCase());
-  else blockedCountries = input.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-}
-
-// --- Cache Management ---
-
-async function loadCache() {
-  try {
-    const res = await storage.get(CACHE_KEY);
-    if (!res[CACHE_KEY]) return;
-
-    const now = Date.now();
-    for (const [user, entry] of Object.entries(res[CACHE_KEY])) {
-      const data = typeof entry === 'object' ? entry : { location: entry, expiry: 0 };
-      if (typeof entry === 'string') data.expiry = now + (CACHE_EXPIRY_DAYS * 86400000);
-      
-      if (data.expiry > now - (CACHE_STALE_DAYS * 86400000)) {
-        locationCache.set(user, data);
+function getDB() {
+  if (dbInstance) return Promise.resolve(dbInstance);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'username' });
       }
-    }
-    if (locationCache.size > MAX_CACHE_SIZE) cleanCache();
-  } catch (e) {}
-}
-
-function saveCacheEntry(username, location, verified = false) {
-  if (isContextInvalid()) return;
-  const days = location === null ? CACHE_EXPIRY_NO_LOC : CACHE_EXPIRY_DAYS;
-  locationCache.set(username, { 
-    location,
-    verified,
-    expiry: Date.now() + (days * 86400000) 
+    };
+    request.onsuccess = (e) => {
+      dbInstance = e.target.result;
+      resolve(dbInstance);
+    };
+    request.onerror = (e) => {
+      reject(e.target.error);
+    };
   });
-  hasUnsavedChanges = true;
+}
+
+async function dbGet(username) {
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const txn = db.transaction(STORE_NAME, 'readonly');
+      const store = txn.objectStore(STORE_NAME);
+      const req = store.get(username.toLowerCase());
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+async function dbSet(username, data) {
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const txn = db.transaction(STORE_NAME, 'readwrite');
+      const store = txn.objectStore(STORE_NAME);
+      const req = store.put({ username: username.toLowerCase(), ...data });
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch (_) {}
+}
+
+
+async function dbDeleteBatch(usernames) {
+  if (!usernames || usernames.length === 0) return;
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const txn = db.transaction(STORE_NAME, 'readwrite');
+      const store = txn.objectStore(STORE_NAME);
+      for (const u of usernames) {
+        store.delete(u.toLowerCase());
+      }
+      txn.oncomplete = () => resolve();
+      txn.onerror = () => reject(txn.error);
+    });
+  } catch (_) {}
+}
+
+async function dbClear() {
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const txn = db.transaction(STORE_NAME, 'readwrite');
+      const store = txn.objectStore(STORE_NAME);
+      const req = store.clear();
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch (_) {}
+}
+
+async function hydrate() {
+  try {
+    const db = await getDB();
+    const now = Date.now();
+    const staleEdge = now - STALE_WINDOW_DAYS * 86_400_000;
+    const toDelete = [];
+    
+    return new Promise((resolve) => {
+      const txn = db.transaction(STORE_NAME, 'readonly');
+      const store = txn.objectStore(STORE_NAME);
+      const request = store.openCursor();
+      
+      request.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          const entry = cursor.value;
+          if (entry.expiry <= staleEdge) {
+            toDelete.push(entry.username);
+          }
+          cursor.continue();
+        } else {
+          if (toDelete.length > 0) {
+            dbDeleteBatch(toDelete).then(() => resolve());
+          } else {
+            resolve();
+          }
+        }
+      };
+      request.onerror = () => resolve();
+    });
+  } catch (_) {}
+}
+
+function record(username, location, verified = false, apiTz = null, isRegion = false) {
+  if (gone()) return;
+  const userKey = username.toLowerCase();
+  const existing = dataMap.get(userKey);
+
+  let finalLocation = location;
+  let finalVerified = verified;
+  let finalIsRegion = isRegion;
+  let finalTz = apiTz;
+
+  if (existing) {
+    const newIsInvalid = location && !getCountryFlag(location);
+    const existingIsValid = existing.location && getCountryFlag(existing.location);
+    const existingIsNull = existing.location === null;
+
+    if (newIsInvalid && (existingIsValid || existingIsNull)) {
+      finalLocation = existing.location;
+      finalIsRegion = existing.isRegion;
+      if (!finalTz) finalTz = existing.timezone;
+    }
+    finalVerified = verified || existing.verified;
+  }
+
+  const days = finalLocation === null ? EXPIRY_EMPTY_DAYS : EXPIRY_DAYS;
+  const tz   = (finalLocation ? resolveTimezone(finalLocation) : null) || finalTz || null;
+  const entry = { location: finalLocation, verified: finalVerified, timezone: tz, isRegion: finalIsRegion, expiry: Date.now() + days * 86_400_000 };
   
-  if (locationCache.size > MAX_CACHE_SIZE + 100) cleanCache();
-  if (saveCacheTimer) clearTimeout(saveCacheTimer);
-  saveCacheTimer = setTimeout(flushCacheToDisk, 2000);
+  dataMap.set(userKey, entry);
+  dbSet(userKey, entry);
+  
+  evict();
 }
 
-async function flushCacheToDisk() {
-  if (!hasUnsavedChanges || isContextInvalid()) return;
-  const exportObj = {};
+function evict() {
+  // Prune the in-memory Map cache only (does not delete from persistent IndexedDB)
   const now = Date.now();
-  for (const [k, v] of locationCache) {
-    if (v.expiry > now) exportObj[k] = v;
-  }
-  await storage.set({ [CACHE_KEY]: exportObj });
-  hasUnsavedChanges = false;
-}
-
-function cleanCache() {
-  const now = Date.now();
-  let changed = false;
-
-  for (const [k, v] of locationCache) {
+  for (const [k, v] of dataMap) {
     if (v.expiry <= now) {
-      locationCache.delete(k);
-      changed = true;
+      dataMap.delete(k);
     }
   }
-
-  if (locationCache.size > MAX_CACHE_SIZE) {
-    const toRemove = locationCache.size - MAX_CACHE_SIZE;
-    for (let i = 0; i < toRemove; i++) {
-      locationCache.delete(locationCache.keys().next().value);
+  if (dataMap.size > MEMORY_CACHE_LIMIT) {
+    let drop = dataMap.size - MEMORY_CACHE_LIMIT;
+    for (const k of dataMap.keys()) {
+      if (drop-- <= 0) break;
+      dataMap.delete(k);
     }
-    changed = true;
   }
-  if (changed) hasUnsavedChanges = true;
 }
 
-// --- Cloud & Network ---
+// Cloud submission batching
+function enqueueSubmission(username, location, verified = false) {
+  if (!location || submittedSession.has(username) || submittedHistory.has(username)) return;
+  const cached = dataMap.get(username);
+  if (cached && cached.location === location && cached.verified === verified) {
+    submittedSession.add(username);
+    return;
+  }
+  submittedSession.add(username);
+  submittedHistory.add(username);
+  if (submittedHistory.size > 2000) {
+    const it = submittedHistory.values();
+    for (let i = 0; i < 500; i++) submittedHistory.delete(it.next().value);
+  }
+  disk.write({ submission_history: Array.from(submittedHistory) });
+  submitBuffer.push({ username, location, verified });
+  if (submitBuffer.length >= CLOUD_BATCH_MAX) drainSubmissions();
+  else if (!submitTimer) submitTimer = setTimeout(drainSubmissions, SUBMIT_FLUSH_MS);
+}
 
-function flushWriteBuffer() {
-  if (writeTimer) clearTimeout(writeTimer);
-  writeTimer = null;
-  if (writeBuffer.length === 0) return;
-
-  const batch = [...writeBuffer];
-  writeBuffer = [];
-  fetch(`${CLOUD_API_URL}/submit`, {
+function drainSubmissions() {
+  if (submitTimer) clearTimeout(submitTimer);
+  submitTimer = null;
+  if (submitBuffer.length === 0) return;
+  const chunk = submitBuffer.splice(0);
+  fetch(`${API_ENDPOINT}/submit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(batch),
+    body: JSON.stringify(chunk),
     keepalive: true
   }).catch(() => {});
 }
 
-function submitToCloud(username, location, verified = false) {
-  if (!location || submittedSessionCache.has(username) || submissionHistory.has(username)) return;
+// ─────────────────────────────────────────────────────────────
+//  FetchPipeline — cloud-first, Twitter fallback, promise-sharing
+// ─────────────────────────────────────────────────────────────
+async function fetchLocation(screenName, cacheOnly = false) {
+  const userKey = screenName.toLowerCase();
   
-  const cached = locationCache.get(username);
-  if (cached && cached.location === location && cached.verified === verified) {
-    submittedSessionCache.add(username);
+  // Hot cache hit
+  const hot = dataMap.get(userKey);
+  if (hot && Date.now() < hot.expiry) {
+    if (hot.location && !getCountryFlag(hot.location)) {
+      // Bypass invalid manual location in hot cache
+    } else {
+      return { location: hot.location, verified: hot.verified ?? false, timezone: hot.timezone ?? null, isRegion: hot.isRegion ?? false, source: 'cache' };
+    }
+  }
+  if (hot) dataMap.delete(userKey);
+
+  if (cacheOnly || devDataSource === 'cache_only') {
+    const dbVal = await dbGet(userKey);
+    if (dbVal && Date.now() < dbVal.expiry) {
+      if (dbVal.location && !getCountryFlag(dbVal.location)) {
+        // Bypass invalid manual location in cold cache
+      } else {
+        if (!dbVal.timezone && dbVal.location) {
+          dbVal.timezone = resolveTimezone(dbVal.location);
+        }
+        dataMap.set(userKey, dbVal);
+        if (dataMap.size > MEMORY_CACHE_LIMIT) {
+          dataMap.delete(dataMap.keys().next().value);
+        }
+        return { location: dbVal.location, verified: dbVal.verified ?? false, timezone: dbVal.timezone ?? null, isRegion: dbVal.isRegion ?? false, source: 'cache' };
+      }
+    }
+    return { location: null, verified: false, timezone: null };
+  }
+
+  // Cold IndexedDB cache hit
+  const dbVal = await dbGet(userKey);
+  if (dbVal && Date.now() < dbVal.expiry) {
+    if (dbVal.location && !getCountryFlag(dbVal.location)) {
+      // Bypass invalid manual location in cold cache
+    } else {
+      if (!dbVal.timezone && dbVal.location) {
+        dbVal.timezone = resolveTimezone(dbVal.location);
+      }
+      dataMap.set(userKey, dbVal);
+      if (dataMap.size > MEMORY_CACHE_LIMIT) {
+        dataMap.delete(dataMap.keys().next().value);
+      }
+      return { location: dbVal.location, verified: dbVal.verified ?? false, timezone: dbVal.timezone ?? null, isRegion: dbVal.isRegion ?? false, source: 'cache' };
+    }
+  }
+
+  // Negative guard
+  const neg = negativeMap.get(userKey);
+  if (neg && Date.now() < neg) return { location: null, verified: false, timezone: null };
+
+  // Dedup – piggyback on in-flight request
+  if (flightMap.has(userKey)) return flightMap.get(userKey);
+
+  if (devDataSource === 'twitter_only') {
+    const ticket = new Promise((resolve, reject) => {
+      twitterPending.push({ screenName: userKey, resolve, reject });
+      drainTwitter();
+    }).then(result => {
+      if (!result?.location) negativeMap.set(userKey, Date.now() + MISS_TTL);
+      flightMap.delete(userKey);
+      return result;
+    });
+    flightMap.set(userKey, ticket);
+    return ticket;
+  }
+
+  const ticket = new Promise((resolve, reject) => {
+    cloudPending.push({ screenName: userKey, resolve, reject });
+    if (!cloudBusy && !cloudBatchTimer) {
+      cloudBatchTimer = setTimeout(() => { cloudBatchTimer = null; drainCloud(); }, 50);
+    }
+  }).then(result => {
+    if (!result?.location) negativeMap.set(userKey, Date.now() + MISS_TTL);
+    flightMap.delete(userKey);
+    return result;
+  });
+
+  flightMap.set(userKey, ticket);
+  return ticket;
+}
+
+async function drainCloud() {
+  if (cloudBusy || cloudPending.length === 0 || gone()) return;
+
+  // Respect backoff timer
+  const now = Date.now();
+  if (cloudBackoffUntil > now) {
+    setTimeout(drainCloud, Math.min(cloudBackoffUntil - now, CLOUD_BACKOFF_MAX));
     return;
   }
 
-  submittedSessionCache.add(username);
-  submissionHistory.add(username);
-  
-  if (submissionHistory.size > 2000) {
-    const iter = submissionHistory.values();
-    for(let i=0; i<500; i++) submissionHistory.delete(iter.next().value);
-  }
-  
-  storage.set({ submission_history: Array.from(submissionHistory) });
-  
-  writeBuffer.push({ username, location, verified });
-  if (writeBuffer.length >= BATCH_SIZE) flushWriteBuffer();
-  else if (!writeTimer) writeTimer = setTimeout(flushWriteBuffer, 30000);
-}
-
-// --- Logic Pipelines ---
-
-async function processCloudQueue() {
-  if (isProcessingCloud || cloudQueue.length === 0 || isContextInvalid()) return;
-  isProcessingCloud = true;
-
-  const batch = [];
-  while (cloudQueue.length > 0 && batch.length < 50) batch.push(cloudQueue.shift());
-
-  if (batch.length === 0) { isProcessingCloud = false; return; }
-
-  const usernames = batch.map(x => x.screenName);
+  cloudBusy = true;
+  const batch = cloudPending.splice(0, CLOUD_BATCH_MAX);
+  const names = batch.map(r => r.screenName);
   let results = {};
-  
-  try {
-    const res = await fetch(`${CLOUD_API_URL}/lookup?users=${encodeURIComponent(usernames.join(','))}`);
-    if (res.ok) results = await res.json();
-  } catch (e) {}
+  let cloudOk = false;
 
-  const retryList = [];
-  
-  batch.forEach(req => {
-    const userData = results[req.screenName.toLowerCase()];
-    if (userData !== undefined) {
-      // Cloud API now returns {location, verified} objects
-      const location = typeof userData === 'object' ? userData.location : userData;
-      const verified = typeof userData === 'object' ? userData.verified : false;
+  try {
+    const res = await fetchWithTimeout(`${API_ENDPOINT}/lookup?users=${encodeURIComponent(names.join(','))}`, {
+      method: 'GET',
+      timeout: 6000
+    });
+    if (res.ok) {
+      results = await res.json();
+      cloudOk = true;
+      cloudFailCount = 0; // Reset backoff on success
+    } else if (res.status === 429) {
+      // Cloudflare rate limited — pause for Retry-After or 60s
+      const retryAfter = parseInt(res.headers.get('Retry-After') || '60', 10);
+      cloudBackoffUntil = Date.now() + retryAfter * 1000;
+      cloudFailCount++;
+    } else {
+      cloudFailCount++;
+    }
+  } catch (_) {
+    cloudFailCount++;
+  }
+
+  // If cloud failed entirely, apply exponential backoff and fall through to Twitter
+  if (!cloudOk && cloudFailCount > 0) {
+    const backoff = Math.min(CLOUD_BACKOFF_BASE * Math.pow(2, cloudFailCount - 1), CLOUD_BACKOFF_MAX);
+    cloudBackoffUntil = Math.max(cloudBackoffUntil, Date.now() + backoff);
+  }
+
+  const retry = [];
+  for (const req of batch) {
+    const payload = results[req.screenName.toLowerCase()];
+    if (payload !== undefined) {
+      const loc  = typeof payload === 'object' ? payload.location : payload;
       
-      // If verifiedOnlyMode is enabled and cloud doesn't have verified info, fall through to Twitter
-      if (verifiedOnlyMode && typeof userData !== 'object') {
+      // Check if the location resolved from Cloud is invalid (cannot be mapped to a country flag)
+      const isInvalidLoc = loc && !getCountryFlag(loc);
+
+      if (isInvalidLoc) {
         if (devDataSource === 'cloudflare_only') {
-          req.resolve({ location, verified: false });
-          queuedUsernames.delete(req.screenName);
+          req.resolve({ location: null, verified: false });
         } else {
-          retryList.push(req);
+          retry.push(req);
         }
       } else {
-        saveCacheEntry(req.screenName, location, verified);
-        req.resolve({ location, verified });
-        queuedUsernames.delete(req.screenName);
+        // Cloud D1 doesn't reliably store verified — preserve any true from passive snooping
+        const cloudVer = typeof payload === 'object' ? payload.verified : false;
+        const cachedVer = dataMap.get(req.screenName)?.verified ?? false;
+        const ver  = cloudVer || cachedVer;
+        const aTz  = typeof payload === 'object' ? payload.timezone : null;
+        if (onlyVerified && typeof payload !== 'object') {
+          if (devDataSource === 'cloudflare_only') {
+            const storedTz = dataMap.get(req.screenName)?.timezone ?? null;
+            req.resolve({ location: loc, verified: false, timezone: storedTz, isRegion: false, source: 'cloudflare' });
+          } else {
+            retry.push(req);
+          }
+        } else {
+          record(req.screenName, loc, ver, aTz);
+          const storedTz = dataMap.get(req.screenName)?.timezone ?? null;
+          req.resolve({ location: loc, verified: ver, timezone: storedTz, isRegion: false, source: 'cloudflare' });
+        }
       }
     } else {
       if (devDataSource === 'cloudflare_only') {
-         req.resolve({ location: null, verified: false });
-         queuedUsernames.delete(req.screenName);
+        req.resolve({ location: null, verified: false });
       } else {
-         retryList.push(req);
+        retry.push(req);
       }
     }
-  });
-
-  if (retryList.length > 0) {
-    retryList.forEach(req => twitterQueue.push(req));
-    processTwitterQueue();
   }
 
-  isProcessingCloud = false;
-  if (cloudQueue.length > 0) queueMicrotask(processCloudQueue); // Immediate (was 50ms)
+  if (retry.length > 0) {
+    for (const r of retry) twitterPending.push(r);
+    drainTwitter();
+  }
+  cloudBusy = false;
+  if (cloudPending.length > 0) queueMicrotask(drainCloud);
 }
 
-async function processTwitterQueue() {
-  if (isProcessingTwitter || twitterQueue.length === 0 || isContextInvalid()) return;
-
+async function drainTwitter() {
+  if (twitterBusy || twitterPending.length === 0 || gone()) return;
   const now = Math.floor(Date.now() / 1000);
-  if (rateLimitResetTime > now) {
-    setTimeout(processTwitterQueue, Math.min((rateLimitResetTime - now) * 1000, 30000));
+  if (rateLimitUntil > now) {
+    setTimeout(drainTwitter, Math.min((rateLimitUntil - now) * 1000, 30_000));
     return;
   }
+  twitterBusy = true;
+  const batch = twitterPending.splice(0, TWITTER_PARALLEL);
+  if (batch.length === 0) { twitterBusy = false; return; }
 
-  isProcessingTwitter = true;
-  
-  // Optimization: Increase parallelism to 6 (was 5) and reduce delay
-  const PARALLEL_LIMIT = 6;
-  const batch = [];
-  while (twitterQueue.length > 0 && batch.length < PARALLEL_LIMIT) {
-    batch.push(twitterQueue.shift());
-  }
-  
-  if (batch.length === 0) { isProcessingTwitter = false; return; }
-
-  const fetchUser = (req) => new Promise((resolve) => {
-    // Optimization: Check cache again immediately before fetching
-    // (Passive data might have arrived while in queue)
-    const freshCache = locationCache.get(req.screenName);
-    if (freshCache && freshCache.expiry > Date.now()) {
-      req.resolve({ location: freshCache.location, verified: freshCache.verified });
-      queuedUsernames.delete(req.screenName);
-      return resolve();
-    }
-
-    const id = Date.now() + Math.random();
-    let responded = false;
-    
-    const handler = (e) => {
-      if (e.source !== window || !e.data || e.data.type !== '__userDataResponse' || e.data.requestId !== id) return;
-      window.removeEventListener('message', handler);
-      
-      if (responded) return;
-      responded = true;
-
-      if (!e.data.isRateLimited) {
-        saveCacheEntry(req.screenName, e.data.location, e.data.verified);
+  const fetchOne = (req) => new Promise(done => {
+    // Re-check cache (passive data may have arrived while queued)
+    const fresh = dataMap.get(req.screenName);
+    if (fresh && fresh.expiry > Date.now()) {
+      if (fresh.location && !getCountryFlag(fresh.location)) {
+        // Bypass invalid manual location in re-check
+      } else {
+        req.resolve({ location: fresh.location, verified: fresh.verified, timezone: fresh.timezone ?? null, isRegion: fresh.isRegion ?? false, source: 'cache' });
+        flightMap.delete(req.screenName);
+        return done();
       }
-      const userData = { location: e.data.location, verified: e.data.verified ?? false };
-      req.resolve(userData);
-      queuedUsernames.delete(req.screenName);
-      if (userData.location) submitToCloud(req.screenName, userData.location, userData.verified);
-      resolve();
+    }
+    const rid = Date.now() + Math.random();
+    let settled = false;
+    const onReply = (e) => {
+      if (e.source !== window || e.data?.type !== '__userDataResponse' || e.data.requestId !== rid) return;
+      window.removeEventListener('message', onReply);
+      if (settled) return;
+      settled = true;
+      if (!e.data.isRateLimited) record(req.screenName, e.data.location, e.data.verified, null, e.data.is_region);
+      const tz = dataMap.get(req.screenName)?.timezone ?? null;
+      const result = { location: e.data.location, verified: e.data.verified ?? false, timezone: tz, isRegion: e.data.is_region, source: 'twitter' };
+      req.resolve(result);
+      flightMap.delete(req.screenName);
+      if (result.location) enqueueSubmission(req.screenName, result.location, result.verified);
+      done();
     };
-    
-    window.addEventListener('message', handler);
-    window.postMessage({ type: '__fetchUserData', screenName: req.screenName, requestId: id, target: 'pageScript' }, '*');
-    
-    // Optimization: Reduced timeout to 4s (was 5s) to fail fast and retry later
-    setTimeout(() => { 
-      if (responded) return;
-      responded = true;
-      setTimeout(() => {
-        window.removeEventListener('message', handler);
-        queuedUsernames.delete(req.screenName);
-      }, 5000);
-      req.resolve({ location: null, verified: false }); 
-      resolve(); 
+    window.addEventListener('message', onReply);
+    window.postMessage({ type: '__fetchUserData', screenName: req.screenName, requestId: rid, target: 'pageScript' }, window.location.origin);
+    setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      setTimeout(() => { window.removeEventListener('message', onReply); flightMap.delete(req.screenName); }, 5000);
+      req.resolve({ location: null, verified: false });
+      done();
     }, 4000);
   });
 
   try {
-    await Promise.all(batch.map(fetchUser));
-    // Optimization: Reduced inter-batch delay to 100ms (was 250ms)
-    setTimeout(() => { isProcessingTwitter = false; processTwitterQueue(); }, 100);
-  } catch (e) {
-    isProcessingTwitter = false;
-    processTwitterQueue();
+    await Promise.all(batch.map(fetchOne));
+    // 300ms gap between batches to prevent hammering the local twitter API
+    setTimeout(() => { twitterBusy = false; drainTwitter(); }, TWITTER_STAGGER_MS);
+  } catch (_) {
+    twitterBusy = false;
+    setTimeout(drainTwitter, TWITTER_STAGGER_MS);
   }
 }
 
-async function getUserData(screenName) {
-  if (devDataSource === 'twitter_only') {
-    return new Promise((resolve, reject) => {
-      queuedUsernames.add(screenName);
-      twitterQueue.push({ screenName, resolve, reject });
-      processTwitterQueue();
-    });
-  }
-
-  if (locationCache.has(screenName)) {
-    const data = locationCache.get(screenName);
-    if (Date.now() < data.expiry) {
-      return { location: data.location, verified: data.verified ?? false };
-    }
-    locationCache.delete(screenName);
-  }
-
-  if (devDataSource === 'cache_only') {
-    return { location: null, verified: false };
-  }
-
-  if (queuedUsernames.has(screenName)) return { location: null, verified: false };
-
-  return new Promise((resolve, reject) => {
-    queuedUsernames.add(screenName);
-    cloudQueue.push({ screenName, resolve, reject });
-    // Accumulate for 50ms window then fire one batch
-    if (!isProcessingCloud && !cloudQueueTimer) {
-      cloudQueueTimer = setTimeout(() => {
-        cloudQueueTimer = null;
-        processCloudQueue();
-      }, 50);
-    }
-  });
-}
-
-// --- DOM & Visuals ---
-
-function extractUsername(el) {
-  const userNode = el.querySelector('[data-testid="User-Name"]');
-  if (!userNode) return null;
-  for (const link of userNode.querySelectorAll('a[href^="/"]')) {
-    const m = link.getAttribute('href').match(/^\/([^\/\?]+)$/);
+// ─────────────────────────────────────────────────────────────
+//  Renderer — flag injection, sync path, pending queue
+// ─────────────────────────────────────────────────────────────
+function findHandle(container) {
+  const nameWrap = container.querySelector('[data-testid="User-Name"]');
+  if (!nameWrap) return null;
+  for (const a of nameWrap.querySelectorAll('a[href^="/"]')) {
+    const m = a.getAttribute('href').match(/^\/([^\/\?]+)$/);
     if (m && !['home','explore','notifications','messages','search'].includes(m[1])) return m[1];
   }
+  // Fallback: search for text containing "@username"
+  const text = nameWrap.textContent;
+  const match = text.match(/@([a-zA-Z0-9_]{1,15})/);
+  if (match) return match[1];
   return null;
 }
 
-async function addFlagToUsername(container, screenName) {
-  if (container.dataset.flagAdded === 'true' || processingUsernames.has(screenName)) return;
-  processingUsernames.add(screenName);
-  container.dataset.flagAdded = 'processing';
+async function processNode(container, screenName) {
+  const currentHandle = container.dataset.tfHandle;
+  if (currentHandle && currentHandle !== screenName) {
+    // DOM Node Recycled! Clean up previous state to prevent visual leaks
+    container.querySelectorAll('.tf-flag').forEach(el => el.remove());
+    const article = container.closest('article[data-testid="tweet"]');
+    if (article) {
+      article.style.display = '';
+      delete article.dataset.locationHidden;
+    }
+    delete container.dataset.tfDone;
+  }
+  
+  container.dataset.tfHandle = screenName;
+
+  if (container.dataset.tfDone === '1') return;
+  container.dataset.tfDone = 'working';
 
   try {
-    // Request location AND verified status from pageScript
-    const userData = await getUserData(screenName);
-    const location = userData?.location;
-    const isVerified = userData?.verified ?? false;
+    const isStatusPage = window.location.pathname.includes('/status/');
+    const isMainAuthor = isStatusPage && window.location.pathname.toLowerCase().startsWith('/' + screenName.toLowerCase() + '/status/');
+    const cacheOnly = isStatusPage && !isMainAuthor && !alwaysLoadComments;
+
+    const data = await fetchLocation(screenName, cacheOnly);
     
-    if (blockedCountries.length && location) {
-      const isBlocked = blockedCountries.some(c => location.toLowerCase().includes(c));
-      
-      // Check if we should filter this user
-      const shouldFilter = isBlocked && (!verifiedOnlyMode || isVerified);
-      
-      if (shouldFilter) {
+    // Ensure the node hasn't been recycled while fetch was in-flight
+    if (container.dataset.tfHandle !== screenName) return;
+
+    const loc  = data?.location;
+    const ver  = data?.verified ?? false;
+    const tz   = data?.timezone ?? null;
+    const reg  = data?.isRegion ?? false;
+
+    // Blocked-region filter
+    if (filteredRegions.length && loc) {
+      const lc = loc.toLowerCase();
+      const blocked  = filteredRegions.some(r => lc.includes(r));
+      const doFilter = blocked && (!onlyVerified || ver);
+      if (doFilter) {
         const article = container.closest('article[data-testid="tweet"]');
         if (article) {
           article.style.display = 'none';
           article.dataset.locationHidden = 'true';
-          container.dataset.flagAdded = 'true';
-          incrementStat('hidden'); // Track hidden posts
-          
-          // If auto-block is enabled, send block request
-          if (autoBlockMode) {
-            window.postMessage({ type: '__blockUser', screenName, target: 'pageScript' }, '*');
-            incrementStat('blocked'); // Track blocked accounts
+          container.dataset.tfDone = '1';
+          bumpStat('hidden');
+          if (autoFilter) {
+            window.postMessage({ type: '__blockUser', screenName, target: 'pageScript' }, window.location.origin);
+            bumpStat('blocked');
           }
           return;
         }
       }
     }
 
-    const flag = getCountryFlag(location);
-    if (!flag) {
-      container.dataset.flagAdded = 'failed';
-      return;
-    }
-    
-    // Track this country for the dashboard (non-blocking)
-    // Pass resolved country name + flag directly to avoid duplicate lookup
+    const emoji = getCountryFlag(loc);
+    if (!emoji) { container.dataset.tfDone = 'miss'; return; }
+
+    // Track country for dashboard
     try {
-      const countryName = resolveCountryName(location);
-      if (countryName) trackCountry(countryName, COUNTRY_FLAGS[countryName]);
-    } catch (e) {
-      // Silently fail - tracking shouldn't break flag display
+      const cName = resolveCountryName(loc);
+      if (cName) spotCountry(cName, COUNTRY_FLAGS[cName]);
+    } catch (_) {}
+
+    const nameWrap = container.querySelector('[data-testid="User-Name"]');
+    if (!nameWrap || nameWrap.querySelector('.tf-flag')) { container.dataset.tfDone = '1'; return; }
+
+    const badge = document.createElement('span');
+    badge.className = 'tf-flag';
+    badge.setAttribute('data-tf-tip', loc);
+
+    const img = document.createElement('img');
+    img.src = getTwemojiUrl(emoji);
+    img.alt = emoji;
+    badge.appendChild(img);
+
+    if (tz) {
+      const ts = getLocalTimeString(tz);
+      if (ts) {
+        const clock = document.createElement('span');
+        clock.className = 'tf-time';
+        clock.dataset.tz = tz;
+        const h = getLocalHour(tz);
+        clock.textContent = (h !== null && (h >= 22 || h < 6) ? '🌙 ' : '') + ts;
+        badge.appendChild(clock);
+        badge.setAttribute('data-tf-tip', `${loc} (${tz} • ${ts})`);
+      }
     }
 
-    const nameNode = container.querySelector('[data-testid="User-Name"]');
-    if (nameNode && !nameNode.querySelector('.tf-flag')) {
-      const span = document.createElement('span');
-      span.className = 'tf-flag';
-      span.title = location;
-      
-      const img = document.createElement('img');
-      img.src = getTwemojiUrl(flag);
-      img.alt = flag;
-      img.title = location;
-      span.appendChild(img);
-      
-      let target = nameNode;
-      const handle = `@${screenName.toLowerCase()}`;
-      const leafs = nameNode.querySelectorAll('*');
-      for (const node of leafs) {
-        if (node.children.length === 0 && node.textContent.toLowerCase().includes(handle)) {
-          if (node.parentElement) { target = node.parentElement; break; }
-        }
-      }
-      target.appendChild(span);
-      container.dataset.flagAdded = 'true';
+    if (reg) {
+      const warn = document.createElement('span');
+      warn.textContent = ' ⚠️';
+      warn.style.fontSize = '0.8em';
+      warn.style.cursor = 'help';
+      badge.appendChild(warn);
+      const currentTip = badge.getAttribute('data-tf-tip');
+      badge.setAttribute('data-tf-tip', `${currentTip} (Approximate)`);
     }
-  } catch (e) {
-    container.dataset.flagAdded = 'failed';
-  } finally {
-    processingUsernames.delete(screenName);
+
+    if (devShowSourceBanner && data?.source) {
+      const srcTag = document.createElement('span');
+      srcTag.className = 'tf-source-tag';
+      srcTag.textContent = data.source;
+      if (data.source === 'cache') srcTag.style.background = '#666';
+      else if (data.source === 'cloudflare') srcTag.style.background = '#f6821f';
+      else if (data.source === 'twitter') srcTag.style.background = '#1d9bf0';
+      badge.appendChild(srcTag);
+    }
+
+    // Find insertion point — next to the @handle
+    let anchor = nameWrap;
+    const handle = `@${screenName.toLowerCase()}`;
+    for (const leaf of nameWrap.querySelectorAll('*')) {
+      if (leaf.children.length === 0 && leaf.textContent.toLowerCase().includes(handle)) {
+        if (leaf.parentElement) { anchor = leaf.parentElement; break; }
+      }
+    }
+    anchor.appendChild(badge);
+    container.dataset.tfDone = '1';
+  } catch (_) {
+    container.dataset.tfDone = 'miss';
   }
 }
 
-const viewportObserver = new IntersectionObserver((entries) => {
-  entries.forEach(entry => {
-    if (entry.isIntersecting) {
-      viewportObserver.unobserve(entry.target);
-      const user = extractUsername(entry.target);
-      if (user) {
-        // Optimization: Immediate check vs Async check to render faster if cached
-        if (locationCache.has(user)) {
-           addFlagToUsername(entry.target, user);
-        } else {
-           // Queue microtask to avoid blocking scroll thread
-           queueMicrotask(() => addFlagToUsername(entry.target, user));
-        }
-      }
-    }
+// ─────────────────────────────────────────────────────────────
+//  Tooltip — single delegated listener
+// ─────────────────────────────────────────────────────────────
+function attachTooltip() {
+  document.body.addEventListener('mouseover', (e) => {
+    const flag = e.target.closest?.('.tf-flag');
+    if (!flag) return;
+    const text = (flag.getAttribute('data-tf-tip') || '').trim();
+    if (!text) return;
+    if (!tip) { tip = document.createElement('div'); tip.id = 'tf-tooltip'; document.body.appendChild(tip); }
+    tip.textContent = text;
+    tip.style.opacity = '0';
+    tip.style.display = 'block';
+    const fr = flag.getBoundingClientRect();
+    const tr = tip.getBoundingClientRect();
+    let left = fr.left + fr.width / 2 - tr.width / 2;
+    let top  = fr.top - tr.height - 8;
+    if (left < 10) left = 10;
+    if (left + tr.width > window.innerWidth - 10) left = window.innerWidth - tr.width - 10;
+    if (top < 10) top = fr.bottom + 8;
+    tip.style.left = `${left}px`;
+    tip.style.top  = `${top}px`;
+    tip.style.opacity = '1';
   });
-}, { rootMargin: PREFETCH_MARGIN });
-
-function scan() {
-  if (!extensionEnabled || isContextInvalid()) return;
-  document.querySelectorAll(`${TARGET_SELECTORS}:not([data-observing])`).forEach(el => {
-    el.dataset.observing = 'true';
-    viewportObserver.observe(el);
+  document.body.addEventListener('mouseout', (e) => {
+    if (e.target.closest?.('.tf-flag') && tip) tip.style.opacity = '0';
+  });
+  document.body.addEventListener('click', () => {
+    if (tip) tip.style.opacity = '0';
   });
 }
 
-// --- Main Init ---
+// ─────────────────────────────────────────────────────────────
+//  Toasts — discovery notifications
+// ─────────────────────────────────────────────────────────────
+function ensureToastCSS() {
+  if (toastCSSReady) return;
+  toastCSSReady = true;
+  const s = document.createElement('style');
+  s.textContent = `
+    @keyframes tf-toast-slide-in {
+      from { transform: translateY(-120%); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+    @keyframes tf-toast-slide-out {
+      from { transform: translateY(0);    opacity: 1; }
+      to   { transform: translateY(-120%); opacity: 0; }
+    }
+    .tf-discovery-toast {
+      position: fixed; top: 24px; right: 24px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      border: 1px solid rgba(29,155,240,0.3);
+      border-radius: 16px; padding: 16px 20px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
+      z-index: 9999999;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      animation: tf-toast-slide-in 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards;
+      backdrop-filter: blur(12px); min-width: 280px;
+    }
+    .tf-discovery-toast.tf-toast-exit { animation: tf-toast-slide-out 0.3s ease-in forwards; }
+    .tf-toast-header { display:flex; align-items:center; gap:8px; margin-bottom:8px; color:#1d9bf0; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; }
+    .tf-toast-sparkle { font-size: 14px; }
+    .tf-toast-country { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+    .tf-toast-flag { font-size:36px; line-height:1; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); }
+    .tf-toast-name { color:#e7e9ea; font-size:18px; font-weight:700; letter-spacing:-0.2px; }
+    .tf-toast-progress { display:flex; align-items:center; gap:8px; }
+    .tf-toast-progress-bar { flex:1; height:6px; background:rgba(255,255,255,0.1); border-radius:3px; overflow:hidden; }
+    .tf-toast-progress-fill { height:100%; background:linear-gradient(90deg,#1d9bf0,#1da1f2); border-radius:3px; transition:width 0.3s ease; }
+    .tf-toast-progress-text { color:#71767b; font-size:13px; font-weight:500; min-width:55px; text-align:right; }
+    
+    .tf-milestone-toast {
+      position: fixed; top: 32px; left: 50%; transform: translateX(-50%) translateY(-150%);
+      background: rgba(255, 255, 255, 0.85);
+      border: 1px solid rgba(207, 217, 222, 0.5);
+      border-radius: 16px; padding: 20px 24px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+      z-index: 9999999;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      animation: tf-milestone-slide-in 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards;
+      min-width: 320px; text-align: center;
+      color: #0f1419;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tf-milestone-toast {
+        background: rgba(21, 32, 43, 0.85);
+        border-color: rgba(56, 68, 77, 0.5);
+        color: #f7f9f9;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      }
+    }
+    @keyframes tf-milestone-slide-in {
+      0% { transform: translateX(-50%) translateY(-150%) scale(0.95); opacity: 0; }
+      70% { transform: translateX(-50%) translateY(8px) scale(1.01); opacity: 1; }
+      100% { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; }
+    }
+    @keyframes tf-milestone-slide-out {
+      from { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; }
+      to   { transform: translateX(-50%) translateY(-150%) scale(0.95); opacity: 0; }
+    }
+    .tf-milestone-toast.tf-toast-exit { animation: tf-milestone-slide-out 0.4s ease-in forwards; }
+    .tf-source-brand {
+      font-size: 11px; font-weight: 700; color: #536471; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;
+    }
+    @media (prefers-color-scheme: dark) { .tf-source-brand { color: #8b98a5; } }
+    .tf-toast-header { display:flex; align-items:center; gap:8px; margin-bottom:10px; color:#1d9bf0; font-size:15px; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; }
+    .tf-milestone-message { color:inherit; font-size:15px; font-weight:500; line-height: 1.4; margin-bottom: 20px; margin-top: 4px; white-space: pre-wrap; }
+    .tf-milestone-btn { 
+      display: inline-block; background: #0f1419; color: #fff; text-decoration: none; 
+      padding: 10px 24px; border-radius: 9999px; font-weight: 700; font-size: 14px; 
+      transition: all 0.2s; border: none; cursor: pointer;
+    }
+    .tf-milestone-btn:hover { background: #272c30; }
+    @media (prefers-color-scheme: dark) {
+      .tf-milestone-btn { background: #eff3f4; color: #0f1419; }
+      .tf-milestone-btn:hover { background: #d7dbdc; }
+    }
+    .tf-confetti-piece {
+      position: absolute;
+      width: 8px; height: 16px;
+      top: 50%; left: 50%;
+      pointer-events: none;
+      opacity: 0;
+      animation: tf-confetti-burst 2s ease-out forwards;
+      z-index: 10;
+    }
+    @keyframes tf-confetti-burst {
+      0% { transform: translate(-50%, -50%) rotate(0deg) scale(0); opacity: 1; }
+      20% { opacity: 1; }
+      100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(1.2); opacity: 0; }
+    }
+  `;
+  document.head.appendChild(s);
+}
 
-async function init() {
-  await loadSettings();
-  await loadCache();
-  if (!extensionEnabled) return;
+function pumpToast() {
+  if (toastBusy || toastQueue.length === 0) return;
+  toastBusy = true;
+  const { countryName, flag, discoveredCount, total } = toastQueue.shift();
+  ensureToastCSS();
+  const old = document.querySelector('.tf-discovery-toast');
+  if (old) old.remove();
+  const pct = Math.round((discoveredCount / total) * 100);
+  const flagUrl = typeof getTwemojiUrl === 'function' ? getTwemojiUrl(flag) : null;
+  const el = document.createElement('div');
+  el.className = 'tf-discovery-toast';
 
+  const headerDiv = document.createElement('div');
+  headerDiv.className = 'tf-toast-header';
+  const sparkleSpan = document.createElement('span');
+  sparkleSpan.className = 'tf-toast-sparkle';
+  sparkleSpan.textContent = '✨';
+  headerDiv.appendChild(sparkleSpan);
+  const headerText = document.createElement('span');
+  headerText.textContent = 'New Country Discovered!';
+  headerDiv.appendChild(headerText);
+  el.appendChild(headerDiv);
+
+  const countryDiv = document.createElement('div');
+  countryDiv.className = 'tf-toast-country';
+  const flagDiv = document.createElement('div');
+  flagDiv.className = 'tf-toast-flag';
+  if (flagUrl) {
+    const flagImg = document.createElement('img');
+    flagImg.src = flagUrl;
+    flagImg.alt = flag;
+    flagImg.style.width = '1em';
+    flagImg.style.height = '1em';
+    flagImg.style.display = 'block';
+    flagDiv.appendChild(flagImg);
+  } else {
+    flagDiv.textContent = flag;
+  }
+  countryDiv.appendChild(flagDiv);
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'tf-toast-name';
+  nameSpan.textContent = countryName;
+  countryDiv.appendChild(nameSpan);
+  el.appendChild(countryDiv);
+
+  const progressDiv = document.createElement('div');
+  progressDiv.className = 'tf-toast-progress';
+  const progressBar = document.createElement('div');
+  progressBar.className = 'tf-toast-progress-bar';
+  const progressFill = document.createElement('div');
+  progressFill.className = 'tf-toast-progress-fill';
+  progressFill.style.width = `${pct}%`;
+  progressBar.appendChild(progressFill);
+  progressDiv.appendChild(progressBar);
+
+  const progressText = document.createElement('span');
+  progressText.className = 'tf-toast-progress-text';
+  progressText.textContent = `${discoveredCount}/${total}`;
+  progressDiv.appendChild(progressText);
+  el.appendChild(progressDiv);
+
+  document.body.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('tf-toast-exit');
+    setTimeout(() => { el.remove(); toastBusy = false; setTimeout(pumpToast, 1000); }, 300);
+  }, 4000);
+}
+
+function showMilestoneToast(data) {
+  milestoneToastQueue.push(data);
+  pumpMilestoneToast();
+}
+
+function pumpMilestoneToast() {
+  if (milestoneToastBusy || milestoneToastQueue.length === 0) return;
+  milestoneToastBusy = true;
+  const { count, message, buttonText, url } = milestoneToastQueue.shift();
+  ensureToastCSS();
+  const old = document.querySelector('.tf-milestone-toast');
+  if (old) old.remove();
+
+  const el = document.createElement('div');
+  el.className = 'tf-milestone-toast';
+
+  if (count >= 500) {
+    const colors = ['#1d9bf0', '#00ba7c', '#f91880', '#ffd400', '#ff7a00'];
+    for(let i=0; i<40; i++) {
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      const tx = (Math.random() - 0.5) * 400 + 'px';
+      const ty = (Math.random() - 0.5) * 300 + 'px';
+      const rot = Math.random() * 720 + 'deg';
+      const delay = Math.random() * 0.2 + 's';
+      const confettiPiece = document.createElement('div');
+      confettiPiece.className = 'tf-confetti-piece';
+      confettiPiece.style.background = color;
+      confettiPiece.style.setProperty('--tx', tx);
+      confettiPiece.style.setProperty('--ty', ty);
+      confettiPiece.style.setProperty('--rot', rot);
+      confettiPiece.style.animationDelay = delay;
+      el.appendChild(confettiPiece);
+    }
+  }
+
+  const brandDiv = document.createElement('div');
+  brandDiv.className = 'tf-source-brand';
+  brandDiv.style.position = 'relative';
+  brandDiv.style.zIndex = '1';
+  brandDiv.textContent = 'Location Flag & Blocker';
+  el.appendChild(brandDiv);
+
+  const headerDiv = document.createElement('div');
+  headerDiv.className = 'tf-toast-header';
+  headerDiv.style.justifyContent = 'center';
+  headerDiv.style.position = 'relative';
+  headerDiv.style.zIndex = '1';
+  const sparkleSpan = document.createElement('span');
+  sparkleSpan.className = 'tf-toast-sparkle';
+  sparkleSpan.textContent = '🏆';
+  headerDiv.appendChild(sparkleSpan);
+  const headerText = document.createElement('span');
+  headerText.textContent = 'Milestone Reached!';
+  headerDiv.appendChild(headerText);
+  el.appendChild(headerDiv);
+
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'tf-milestone-message';
+  messageDiv.style.position = 'relative';
+  messageDiv.style.zIndex = '1';
+  messageDiv.textContent = message;
+  el.appendChild(messageDiv);
+
+  const actionLink = document.createElement('a');
+  actionLink.href = url;
+  actionLink.target = '_blank';
+  actionLink.className = 'tf-milestone-btn';
+  actionLink.style.position = 'relative';
+  actionLink.style.zIndex = '1';
+  actionLink.textContent = buttonText;
+  el.appendChild(actionLink);
+
+  document.body.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('tf-toast-exit');
+    setTimeout(() => { el.remove(); milestoneToastBusy = false; setTimeout(pumpMilestoneToast, 1000); }, 400);
+  }, 10000);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Lifecycle — MutationObserver, IntersectionObserver, messages
+// ─────────────────────────────────────────────────────────────
+function onVisible(entries) {
+  for (const e of entries) {
+    if (e.isIntersecting) {
+      // Schedule a lazy fetch — if the user scrolls past within LAZY_DELAY_MS, it's cancelled
+      if (!lazyTimers.has(e.target)) {
+        const el = e.target;
+        const tid = setTimeout(() => {
+          lazyTimers.delete(el);
+          viewport.unobserve(el);
+          watched.delete(el);
+          const user = findHandle(el);
+          if (user) processNode(el, user);
+        }, LAZY_DELAY_MS);
+        lazyTimers.set(el, tid);
+      }
+    } else {
+      // Element left the viewport before the lazy timer fired — cancel
+      const tid = lazyTimers.get(e.target);
+      if (tid) { clearTimeout(tid); lazyTimers.delete(e.target); }
+    }
+  }
+}
+
+function trackElement(el) {
+  if (el.dataset.tfWatch) return;
+  el.dataset.tfWatch = '1';
+  watched.add(el);
+  viewport.observe(el);
+}
+
+function initialSweep() {
+  if (!enabled || gone()) return;
+  for (const el of document.querySelectorAll(ELEMENT_SELECTORS)) {
+    if (!el.dataset.tfWatch) trackElement(el);
+  }
+}
+
+function parseRegions(input) {
+  if (!input) filteredRegions = [];
+  else if (Array.isArray(input)) filteredRegions = input.map(s => s.toLowerCase());
+  else filteredRegions = input.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+
+// Stats / tracking helpers
+function bumpStat(kind) { if (!gone()) chrome.runtime.sendMessage({ type: 'incrementStat', statType: kind }); }
+function spotCountry(name, flag) { if (!name || !flag || gone()) return; chrome.runtime.sendMessage({ type: 'countrySpotted', country: name, flag }); }
+
+// ─────────────────────────────────────────────────────────────
+//  Boot
+// ─────────────────────────────────────────────────────────────
+async function boot() {
+  let cachedQueryId = '';
+  // 1. Settings
+  try {
+    const cfg = await new Promise(r => {
+      if (gone()) return r({});
+      chrome.runtime.sendMessage({ type: 'getSettings' }, resp => {
+        if (chrome.runtime.lastError) r({}); else r(resp || {});
+      });
+    });
+    enabled      = cfg.extension_enabled ?? true;
+    onlyVerified = cfg.verified_only_mode ?? false;
+    autoFilter   = cfg.auto_block_mode ?? false;
+    discoveryOn  = cfg.passport_mode ?? true;
+    devDataSource = cfg.dev_data_source || 'auto';
+    alwaysLoadComments = cfg.always_load_comments ?? false;
+    if (cfg.blocked_countries) parseRegions(cfg.blocked_countries);
+    const local = await disk.read(['submission_history', 'dev_show_source_banner', '_tf_query_id']);
+    submittedHistory = new Set(local.submission_history || []);
+    devShowSourceBanner = local.dev_show_source_banner ?? false;
+    cachedQueryId = local._tf_query_id || '';
+    if (cachedQueryId) {
+      window.postMessage({ target: 'pageScript', type: '__setCachedQueryId', queryId: cachedQueryId }, window.location.origin);
+    }
+  } catch (_) {}
+
+  // 2. Cache
+  await hydrate();
+  if (!enabled) return;
+
+  // 3. Styles
   if (!document.getElementById('tf-style')) {
     const s = document.createElement('style');
     s.id = 'tf-style';
-    s.textContent = `.tf-flag { contain: layout style; margin: 0 4px; display: inline-flex; align-items: center; vertical-align: middle; height: 1.2em; } .tf-flag img { height: 1.2em; width: auto; display: block; }`;
+    s.textContent = `
+      .tf-flag { contain: layout style; margin: 0 4px; display: inline-flex; align-items: center; vertical-align: middle; height: 1.2em; gap: 3px; cursor: help; }
+      .tf-flag img { height: 1.2em; width: auto; display: block; pointer-events: none; }
+      .tf-time { font-size: 11px; color: #71767b; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.2em; pointer-events: none; }
+      #tf-tooltip {
+        position: fixed; z-index: 100000;
+        background: #1d9bf0; color: #fff;
+        padding: 4px 8px; border-radius: 4px;
+        font-size: 12px; font-weight: 600;
+        pointer-events: none;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        opacity: 0; transition: opacity 0.15s;
+        white-space: nowrap;
+      }
+      .tf-source-tag { font-size: 9px; padding: 2px 4px; border-radius: 4px; background: #333; color: #fff; line-height: 1; vertical-align: middle; margin-left: 4px; text-transform: uppercase; font-weight: bold; pointer-events: none; }
+      @media (prefers-color-scheme: dark) { #tf-tooltip { background: #fff; color: #000; } }
+      [data-tw-theme="dark"] #tf-tooltip { background: #fff; color: #000; }
+    `;
     (document.head || document.documentElement).appendChild(s);
   }
 
-  // Preconnect to Cloud API and Twemoji CDN for faster loading
-  const preconnectCloud = document.createElement('link');
-  preconnectCloud.rel = 'preconnect'; preconnectCloud.href = CLOUD_API_URL;
-  document.head.appendChild(preconnectCloud);
-  
-  const preconnectTwemoji = document.createElement('link');
-  preconnectTwemoji.rel = 'preconnect'; preconnectTwemoji.href = 'https://abs-0.twimg.com';
-  preconnectTwemoji.crossOrigin = 'anonymous';
-  document.head.appendChild(preconnectTwemoji);
+  // 4. Clock — refresh .tf-time elements + sweep expired negatives
+  setInterval(() => {
+    // Skip clock updates when tab is not visible to save CPU
+    if (document.hidden) return;
+    for (const el of document.querySelectorAll('.tf-time[data-tz]')) {
+      const tz = el.dataset.tz;
+      const ts = getLocalTimeString(tz);
+      if (ts) {
+        const h = getLocalHour(tz);
+        el.textContent = (h !== null && (h >= 22 || h < 6) ? '🌙 ' : '') + ts;
+      }
+    }
+    // Sweep expired negative-cache entries and enforce cap
+    const now = Date.now();
+    for (const [k, exp] of negativeMap) { if (exp <= now) negativeMap.delete(k); }
+    if (negativeMap.size > NEGATIVE_MAP_CAP) {
+      let drop = negativeMap.size - Math.floor(NEGATIVE_MAP_CAP / 2);
+      for (const k of negativeMap.keys()) { if (drop-- <= 0) break; negativeMap.delete(k); }
+    }
+  }, CLOCK_TICK_MS);
 
-  const script = document.createElement('script');
-  script.src = chrome.runtime.getURL('pageScript.js');
-  script.setAttribute('data-extension-id', chrome.runtime.id);
-  script.onload = () => script.remove();
-  (document.head || document.documentElement).appendChild(script);
+  // 5. Preconnect
+  for (const [href, co] of [[API_ENDPOINT, false], ['https://abs-0.twimg.com', true]]) {
+    const link = document.createElement('link');
+    link.rel = 'preconnect'; link.href = href;
+    if (co) link.crossOrigin = 'anonymous';
+    document.head.appendChild(link);
+  }
 
-  // Debounced MutationObserver to prevent excessive scan() calls during rapid scrolling
-  let scanTimer = null;
-  observer = new MutationObserver(() => {
-    if (scanTimer) return;
-    scanTimer = requestAnimationFrame(() => {
-      scan();
-      scanTimer = null;
-    });
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-  
-  window.addEventListener('message', (e) => {
-    if (e.source !== window) return;
+  // 6. Inject pageScript (Now handled via manifest.json MAIN world content_scripts)
 
-    if (e.data?.type === '__passiveData' && Array.isArray(e.data.users)) {
-      // Bulk cache update from timeline data
-      e.data.users.forEach(u => {
-        if (u && u.screen_name) {
-          // Only save if verified or has location (optimization)
-          if (u.location || u.verified) {
-            saveCacheEntry(u.screen_name, u.location || null, u.verified);
-            // If we have a location, optimistically send to cloud
-            if (u.location) submitToCloud(u.screen_name, u.location, u.verified);
+  // 7. Delegated tooltip
+  attachTooltip();
+
+  // 8. Targeted MutationObserver — addedNodes only, micro-batched
+  let pending = new Set();
+  let drainTimer = null;
+  const IGNORED_TAGS = new Set(['IMG', 'SPAN', 'SVG', 'PATH', 'BUTTON', 'CANVAS', 'STYLE', 'SCRIPT', 'LINK', 'BR', 'HR', 'INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'A', 'I', 'B', 'EM', 'STRONG', 'LABEL']);
+  const flush = () => {
+    if (pending.size === 0) return;
+    const nodes = Array.from(pending);
+    pending = new Set();
+    for (const n of nodes) trackElement(n);
+  };
+  const scheduleFlush = () => { if (!drainTimer) drainTimer = setTimeout(() => { drainTimer = null; flush(); }, DRAIN_INTERVAL); };
+
+  watcherRef = new MutationObserver(mutations => {
+    if (!enabled) return;
+    for (const mu of mutations) {
+      for (const node of mu.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        
+        // Fast test-id pre-filter: Skip subtree query if no data-testid attributes exist anywhere in the hierarchy
+        const hasTestId = node.hasAttribute('data-testid') || (node.querySelector && node.querySelector('[data-testid]'));
+        if (!hasTestId) continue;
+
+        if (node.matches?.(ELEMENT_SELECTORS) && !node.dataset.tfWatch) pending.add(node);
+        if (!IGNORED_TAGS.has(node.tagName) && node.querySelectorAll) {
+          for (const c of node.querySelectorAll(ELEMENT_SELECTORS)) {
+            if (!c.dataset.tfWatch) pending.add(c);
           }
         }
-      });
+      }
+    }
+    if (pending.size > 0) scheduleFlush();
+  });
+  watcherRef.observe(document.body, { childList: true, subtree: true });
+
+  // 9. Passive data from pageScript.js
+  window.addEventListener('message', (e) => {
+    if (e.source !== window) return;
+    if (e.data?.type === '__passiveData' && Array.isArray(e.data.users)) {
+      for (const u of e.data.users) {
+        if (u?.screen_name && (u.location || u.verified || u.is_region)) {
+          record(u.screen_name, u.location || null, u.verified, null, u.is_region);
+          if (u.location) enqueueSubmission(u.screen_name, u.location, u.verified);
+        }
+      }
       return;
     }
-
-    if (e.data?.type === '__rateLimitInfo') {
-      rateLimitResetTime = e.data.resetTime;
+    if (e.data?.type === '__rateLimitInfo') rateLimitUntil = e.data.resetTime;
+    // Persist discovered query ID for faster subsequent page loads
+    if (e.data?.type === '__queryIdDiscovered' && e.data.queryId) {
+      disk.write({ _tf_query_id: e.data.queryId });
     }
   });
-  
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.type === 'extensionToggle') {
-      extensionEnabled = request.enabled;
-      if (extensionEnabled) {
-        setTimeout(() => { scan(); }, 500);
+
+  // 10. Chrome runtime messages
+  chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+    if (msg.type === 'extensionToggle') {
+      enabled = msg.enabled;
+      if (enabled) {
+        setTimeout(initialSweep, 500);
+        if (watcherRef) watcherRef.observe(document.body, { childList: true, subtree: true });
       } else {
-        document.querySelectorAll('.tf-flag').forEach(e => e.remove());
-        document.querySelectorAll('[data-location-hidden]').forEach(e => {
-          e.style.display = ''; delete e.dataset.locationHidden;
+        document.querySelectorAll('.tf-flag').forEach(f => f.remove());
+        document.querySelectorAll('[data-location-hidden]').forEach(el => {
+          el.style.display = ''; delete el.dataset.locationHidden;
         });
-        if (viewportObserver) viewportObserver.disconnect();
+        viewport.disconnect();
+        watched = new WeakSet();
+        if (watcherRef) watcherRef.disconnect();
       }
-    } else if (request.type === 'settingsUpdate') {
-      // Handle centralized settings broadcast from background.js
-      const settings = request.settings;
-      extensionEnabled = settings.extension_enabled ?? extensionEnabled;
-      verifiedOnlyMode = settings.verified_only_mode ?? verifiedOnlyMode;
-      autoBlockMode = settings.auto_block_mode ?? autoBlockMode;
-      passportMode = settings.passport_mode ?? passportMode;
-      devDataSource = settings.dev_data_source || devDataSource;
-      if (settings.blocked_countries) {
-        updateBlockedCountries(settings.blocked_countries);
-      }
-    } else if (request.type === 'devDataSourceUpdate') {
-      devDataSource = request.source;
-    } else if (request.type === 'showDiscoveryToast' && passportMode) {
-      const { countryName, flag, discoveredCount, total } = request;
-      discoveryQueue.push({ countryName, flag, discoveredCount, total });
-      processDiscoveryQueue();
-    } else if (request.type === 'blockedCountriesUpdate') {
-      updateBlockedCountries(request.countries);
-    } else if (request.type === 'verifiedOnlyUpdate') {
-      verifiedOnlyMode = request.enabled;
-    } else if (request.type === 'autoBlockUpdate') {
-      autoBlockMode = request.enabled;
-    } else if (request.type === 'getStatus') {
+    } else if (msg.type === 'settingsUpdate') {
+      const s = msg.settings;
+      enabled      = s.extension_enabled ?? enabled;
+      onlyVerified = s.verified_only_mode ?? onlyVerified;
+      autoFilter   = s.auto_block_mode ?? autoFilter;
+      discoveryOn  = s.passport_mode ?? discoveryOn;
+      devDataSource = s.dev_data_source || devDataSource;
+      alwaysLoadComments = s.always_load_comments ?? alwaysLoadComments;
+      if (s.blocked_countries) parseRegions(s.blocked_countries);
+    } else if (msg.type === 'alwaysLoadCommentsUpdate') {
+      alwaysLoadComments = msg.enabled;
+    } else if (msg.type === 'devDataSourceUpdate') {
+      devDataSource = msg.source;
+    } else if (msg.type === 'devBannerUpdate') {
+      devShowSourceBanner = msg.enabled;
+    } else if (msg.type === 'showDiscoveryToast' && discoveryOn) {
+      toastQueue.push({ countryName: msg.countryName, flag: msg.flag, discoveredCount: msg.discoveredCount, total: msg.total });
+      pumpToast();
+    } else if (msg.type === 'showMilestoneToast') {
+      showMilestoneToast({ count: msg.count, message: msg.message, buttonText: msg.buttonText, url: msg.url });
+    } else if (msg.type === 'blockedCountriesUpdate') {
+      parseRegions(msg.countries);
+    } else if (msg.type === 'verifiedOnlyUpdate') {
+      onlyVerified = msg.enabled;
+    } else if (msg.type === 'autoBlockUpdate') {
+      autoFilter = msg.enabled;
+    } else if (msg.type === 'getStatus') {
       const now = Math.floor(Date.now() / 1000);
-      const isRateLimited = rateLimitResetTime > now;
-      sendResponse({
-        rateLimited: isRateLimited,
-        resetTime: rateLimitResetTime,
-        queueLength: cloudQueue.length + twitterQueue.length
-      });
+      respond({ rateLimited: rateLimitUntil > now, resetTime: rateLimitUntil, queueLength: cloudPending.length + twitterPending.length });
+    } else if (msg.type === 'cacheCleared') {
+      dataMap.clear();
+      negativeMap.clear();
+      dbClear();
+      initialSweep();
     }
   });
 
-  scan();
+  // 11. Initial sweep
+  initialSweep();
 }
 
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-else init();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+else boot();
 
 window.addEventListener('pagehide', () => {
-  if (saveCacheTimer) clearTimeout(saveCacheTimer);
-  flushCacheToDisk();
-  flushWriteBuffer();
+  drainSubmissions();
 });

@@ -1,23 +1,123 @@
 (function() {
+  if (window.__twitterLocationFlagsLoaded) return;
+  window.__twitterLocationFlagsLoaded = true;
+
   // State
   let twitterHeaders = null;
   let headersReady = false;
   let activeQueryId = null; // Discovered dynamically
   let queryIdDiscovered = false;
+  let discoveredBearerToken = null; // Sniffed from Twitter's own API calls
+
+  let headersPromiseResolver = null;
+  const headersPromise = new Promise(resolve => {
+    headersPromiseResolver = resolve;
+  });
+
+  // Load cached query ID passed from content script
+  const scriptEl = document.currentScript || document.querySelector('script[data-cached-query-id]');
+  if (scriptEl) {
+    const cachedId = scriptEl.getAttribute('data-cached-query-id');
+    if (cachedId) {
+      activeQueryId = cachedId;
+      queryIdDiscovered = true;
+    }
+  }
+
+  // Hardcoded fallback — only used if sniffing fails
+  const FALLBACK_BEARER = 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+
+  function extractQueryIdFromString(str) {
+    if (!str || typeof str !== 'string') return null;
+    const m = str.match(/queryId:"([a-zA-Z0-9_-]+)".{0,100}AboutAccountQuery|AboutAccountQuery.{0,100}queryId:"([a-zA-Z0-9_-]+)"/s);
+    return m ? (m[1] || m[2]) : null;
+  }
+
+  function scanWebpackSource(modules) {
+    for (const modId in modules) {
+      const modFn = modules[modId];
+      if (typeof modFn === 'function') {
+        const fnStr = modFn.toString();
+        if (fnStr.includes('AboutAccountQuery')) {
+          const qId = extractQueryIdFromString(fnStr);
+          if (qId) return qId;
+        }
+      }
+    }
+    return null;
+  }
+
+  function setupWebpackInterceptor() {
+    if (typeof window === 'undefined') return;
+
+    const checkAndSet = (chunk) => {
+      if (queryIdDiscovered && activeQueryId) return;
+      if (chunk && chunk[1]) {
+        const qId = scanWebpackSource(chunk[1]);
+        if (qId) {
+          activeQueryId = qId;
+          queryIdDiscovered = true;
+          sendToContent('__queryIdDiscovered', { queryId: activeQueryId });
+        }
+      }
+    };
+
+    // Intercept future chunk pushes
+    if (!window.webpackChunk_twitter_responsive_web) {
+      window.webpackChunk_twitter_responsive_web = [];
+    }
+
+    const originalPush = window.webpackChunk_twitter_responsive_web.push;
+    window.webpackChunk_twitter_responsive_web.push = function(...args) {
+      for (const arg of args) {
+        try {
+          checkAndSet(arg);
+        } catch (e) {}
+      }
+      return originalPush.apply(this, args);
+    };
+
+    // Scan already loaded chunks
+    try {
+      const chunks = window.webpackChunk_twitter_responsive_web;
+      for (const chunk of chunks) {
+        if (chunk && chunk[1]) {
+          const qId = scanWebpackSource(chunk[1]);
+          if (qId) {
+            activeQueryId = qId;
+            queryIdDiscovered = true;
+            sendToContent('__queryIdDiscovered', { queryId: activeQueryId });
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Start intercepting and scanning Webpack chunks immediately
+  setupWebpackInterceptor();
 
   // --- Passive Data Snooping ---
   
+  // Skip keys known to never contain user objects — saves CPU on deep traversal
+  const SKIP_KEYS = new Set(['instructions', 'globalObjects', 'promoted_content', 'card', 'media', 'entities', 'extended_entities', 'features', 'mediaStats', 'birdwatch_pivot', 'tombstone']);
+  const MAX_DEPTH = 15;
+
   // Recursively find user objects in arbitrary JSON (Timeline data)
-  function extractUsersFromResponse(data, usersFound = new Map()) {
-    if (!data || typeof data !== 'object') return;
+  function extractUsersFromResponse(data, usersFound = new Map(), depth = 0) {
+    if (!data || typeof data !== 'object' || depth > MAX_DEPTH) return usersFound;
 
     // Check if this object looks like a User result
-    if (data.screen_name && (data.location || data.verified || data.is_blue_verified)) {
+    if (data.screen_name && (data.location || data.verified || data.is_blue_verified || data.about_profile)) {
       if (!usersFound.has(data.screen_name)) {
+        const profile = data.about_profile;
         usersFound.set(data.screen_name, {
           screen_name: data.screen_name,
-          location: data.location || data.legacy?.location || null,
-          verified: !!(data.verified || data.is_blue_verified || data.legacy?.verified)
+          location: profile?.account_based_in || data.location || data.legacy?.location || null,
+          verified: !!(data.verified || data.is_blue_verified || data.legacy?.verified || data.legacy?.verified_type || data.verification_info?.is_identity_verified),
+          utc_offset: data.utc_offset ?? data.legacy?.utc_offset ?? null,
+          time_zone: data.time_zone ?? data.legacy?.time_zone ?? null,
+          is_region: profile?.location_accurate === false
         });
       }
     }
@@ -25,26 +125,34 @@
     if (data.legacy && data.legacy.screen_name) {
       const u = data.legacy;
       if (!usersFound.has(u.screen_name)) {
+        // Legacy objects usually don't have about_profile, but checking just in case
+        const profile = data.about_profile;
         usersFound.set(u.screen_name, {
           screen_name: u.screen_name,
-          location: u.location || null,
-          verified: !!(u.verified || data.is_blue_verified)
+          location: profile?.account_based_in || u.location || null,
+          verified: !!(u.verified || data.is_blue_verified || u.verified_type || data.verification_info?.is_identity_verified),
+          utc_offset: u.utc_offset ?? data.utc_offset ?? null,
+          time_zone: u.time_zone ?? data.time_zone ?? null,
+          is_region: profile?.location_accurate === false
         });
       }
     }
 
     // Traverse arrays and objects
     if (Array.isArray(data)) {
-      for (const item of data) extractUsersFromResponse(item, usersFound);
+      for (const item of data) extractUsersFromResponse(item, usersFound, depth + 1);
     } else {
-      for (const key in data) {
-        // Optimization: Skip large non-user fields to save CPU
-        if (key !== 'instructions' && key !== 'globalObjects' && typeof data[key] === 'object') {
-          extractUsersFromResponse(data[key], usersFound);
+      const keys = Object.keys(data);
+      for (const key of keys) {
+        if (SKIP_KEYS.has(key)) {
+          // Special handler for globalObjects.users
+          if (key === 'globalObjects' && data.globalObjects?.users) {
+            Object.values(data.globalObjects.users).forEach(u => extractUsersFromResponse(u, usersFound, depth + 1));
+          }
+          continue;
         }
-        // Specific handlers for known structures
-        if (key === 'globalObjects' && data.globalObjects.users) {
-          Object.values(data.globalObjects.users).forEach(u => extractUsersFromResponse(u, usersFound));
+        if (data[key] && typeof data[key] === 'object') {
+          extractUsersFromResponse(data[key], usersFound, depth + 1);
         }
       }
     }
@@ -75,32 +183,22 @@
   async function discoverQueryId() {
     if (queryIdDiscovered && activeQueryId) return activeQueryId;
     
-    // Method 1: Scan inline and loaded scripts on the page
-    const scripts = document.querySelectorAll('script[src]');
+    // Method 1: Scan inline script contents (does not make network requests, completely CSP-safe)
+    const scripts = document.querySelectorAll('script');
     for (const script of scripts) {
+      if (script.src) continue; // Skip external scripts
       try {
-        if (!script.src.includes('/client-web/') && !script.src.includes('main.')) continue;
-        const resp = await fetch(script.src, { credentials: 'omit' });
-        if (!resp.ok) continue;
-        const text = await resp.text();
-        // Twitter bundles map query names to IDs like: {queryId:"abc123",operationName:"AboutAccountQuery",...}
-        const patterns = [
-          /queryId:"([a-zA-Z0-9_-]+)",operationName:"AboutAccountQuery"/,
-          /operationName:"AboutAccountQuery",.*?queryId:"([a-zA-Z0-9_-]+)"/,
-          /"AboutAccountQuery".*?queryId:"([a-zA-Z0-9_-]+)"/,
-          /queryId:"([a-zA-Z0-9_-]+)".*?"AboutAccountQuery"/
-        ];
-        for (const pattern of patterns) {
-          const match = text.match(pattern);
-          if (match && match[1]) {
-            activeQueryId = match[1];
+        const text = script.textContent;
+        if (text && text.includes('AboutAccountQuery')) {
+          const qId = extractQueryIdFromString(text);
+          if (qId) {
+            activeQueryId = qId;
             queryIdDiscovered = true;
+            sendToContent('__queryIdDiscovered', { queryId: activeQueryId });
             return activeQueryId;
           }
         }
-      } catch (e) {
-        // Skip inaccessible scripts
-      }
+      } catch (e) {}
     }
     
     // Method 2: Fallback — try known recent IDs
@@ -108,12 +206,12 @@
     for (const id of fallbackIds) {
       try {
         const testUrl = `${window.location.origin}/i/api/graphql/${id}/AboutAccountQuery?variables=${encodeURIComponent(JSON.stringify({screenName: "x"}))}`;
-        const resp = await fetch(testUrl, {
+        const resp = await fetchWithTimeout(testUrl, {
           method: 'GET',
           credentials: 'include',
           headers: twitterHeaders || { 'Accept': 'application/json' },
           referrerPolicy: 'origin-when-cross-origin'
-        });
+        }, 5000);
         // 400 = wrong query ID, 403/404 = wrong user but valid ID
         if (resp.status !== 400) {
           activeQueryId = id;
@@ -134,9 +232,10 @@
     // Only capture query IDs from AboutAccountQuery endpoints specifically
     if (url.includes('/graphql/') && url.includes('AboutAccount')) {
       const match = url.match(/\/graphql\/([a-zA-Z0-9_-]+)\//);
-      if (match && match[1]) {
+      if (match && match[1] && match[1] !== activeQueryId) {
         activeQueryId = match[1];
         queryIdDiscovered = true;
+        sendToContent('__queryIdDiscovered', { queryId: activeQueryId });
       }
     }
   }
@@ -151,12 +250,34 @@
       Object.assign(headerObj, headers);
     }
     
+    // Sniff Bearer token from Twitter's own API calls
+    const auth = headerObj['authorization'] || headerObj['Authorization'];
+    if (auth && auth.startsWith('Bearer ') && !discoveredBearerToken) {
+      discoveredBearerToken = auth;
+    }
+    
+    // Sanitize headers to prevent credential leakage (delete cookies & session IDs)
+    const sensitive = ['cookie', 'cookie2', 'authorization-x', 'x-client-uuid'];
+    for (const key of Object.keys(headerObj)) {
+      if (sensitive.includes(key.toLowerCase())) {
+        delete headerObj[key];
+      }
+    }
+    
     twitterHeaders = headerObj;
     headersReady = true;
+    if (headersPromiseResolver) {
+      headersPromiseResolver();
+      headersPromiseResolver = null;
+    }
   }
 
   function sendToContent(type, payload = {}) {
-    window.postMessage({ target: 'contentScript', type, ...payload }, '*');
+    window.postMessage({ target: 'contentScript', type, ...payload }, window.location.origin);
+  }
+
+  async function fetchWithTimeout(url, options = {}, timeout = 6000) {
+    return originalFetch(url, { ...options, signal: AbortSignal.timeout(timeout) });
   }
 
   // --- Interceptors ---
@@ -225,7 +346,7 @@
     const csrfToken = getCookie('ct0');
     if (csrfToken) {
       twitterHeaders = {
-        'authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
+        'authorization': discoveredBearerToken || FALLBACK_BEARER,
         'x-csrf-token': csrfToken,
         'x-twitter-active-user': 'yes',
         'x-twitter-auth-type': 'OAuth2Session',
@@ -234,6 +355,10 @@
         'Content-Type': 'application/json'
       };
       headersReady = true;
+      if (headersPromiseResolver) {
+        headersPromiseResolver();
+        headersPromiseResolver = null;
+      }
     }
   }, 500);
 
@@ -242,15 +367,25 @@
   window.addEventListener('message', async (event) => {
     if (event.source !== window || event.data?.target !== 'pageScript') return;
 
+    if (event.data.type === '__setCachedQueryId') {
+      const { queryId } = event.data;
+      if (queryId && !queryIdDiscovered) {
+        activeQueryId = queryId;
+        queryIdDiscovered = true;
+      }
+      return;
+    }
+
     // Handle user data fetch (location + verified status)
     if (event.data.type === '__fetchUserData') {
       const { screenName, requestId } = event.data;
 
       // Wait for headers
-      let attempts = 0;
-      while (!headersReady && attempts < 30) {
-        await new Promise(r => setTimeout(r, 100));
-        attempts++;
+      if (!headersReady) {
+        await Promise.race([
+          headersPromise,
+          new Promise(r => setTimeout(r, 3000))
+        ]);
       }
       
       // Ensure we have a valid query ID
@@ -261,12 +396,12 @@
         const baseUrl = window.location.origin;
         let url = `${baseUrl}/i/api/graphql/${activeQueryId}/AboutAccountQuery?variables=${variables}`;
         
-        let response = await originalFetch(url, {
+        let response = await fetchWithTimeout(url, {
           method: 'GET',
           credentials: 'include',
           headers: twitterHeaders || { 'Accept': 'application/json' },
           referrerPolicy: 'origin-when-cross-origin'
-        });
+        }, 5000);
 
         // If 400, the query ID is stale — re-discover and retry once
         if (response.status === 400 && queryIdDiscovered) {
@@ -274,12 +409,12 @@
           activeQueryId = null;
           await discoverQueryId();
           url = `${baseUrl}/i/api/graphql/${activeQueryId}/AboutAccountQuery?variables=${variables}`;
-          response = await originalFetch(url, {
+          response = await fetchWithTimeout(url, {
             method: 'GET',
             credentials: 'include',
             headers: twitterHeaders || { 'Accept': 'application/json' },
             referrerPolicy: 'origin-when-cross-origin'
-          });
+          }, 5000);
         }
 
         if (response.ok) {
@@ -288,11 +423,13 @@
           broadcastPassiveData(data);
           const userResult = data?.data?.user_result_by_screen_name?.result;
           const location = userResult?.about_profile?.account_based_in || null;
+          const is_region = userResult?.about_profile?.location_accurate === false;
+          // Check multiple verified fields - Twitter may use different ones
           const verified = userResult?.is_blue_verified === true || 
                            userResult?.verified === true ||
                            userResult?.legacy?.verified === true ||
                            userResult?.legacy?.is_blue_verified === true;
-          sendToContent('__userDataResponse', { screenName, location, verified, requestId });
+          sendToContent('__userDataResponse', { screenName, location, verified, is_region, requestId });
         } else {
           if (response.status === 429) {
             const reset = response.headers.get('x-rate-limit-reset');
@@ -313,10 +450,11 @@
       const { screenName } = event.data;
 
       // Wait for headers
-      let attempts = 0;
-      while (!headersReady && attempts < 30) {
-        await new Promise(r => setTimeout(r, 100));
-        attempts++;
+      if (!headersReady) {
+        await Promise.race([
+          headersPromise,
+          new Promise(r => setTimeout(r, 3000))
+        ]);
       }
 
       try {
@@ -328,6 +466,8 @@
           headers: twitterHeaders || { 'Accept': 'application/json' },
           referrerPolicy: 'origin-when-cross-origin'
         });
+        
+        // Block is fire-and-forget
       } catch (error) {
         // Block is fire-and-forget
       }

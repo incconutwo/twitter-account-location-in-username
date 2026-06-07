@@ -194,7 +194,7 @@ body {
   fill: var(--bg-tertiary);
   stroke: var(--border-color);
   stroke-width: 0.5;
-  transition: fill 0.2s ease, transform 0.2s ease;
+  transition: fill 0.2s ease, stroke 0.2s ease, stroke-width 0.2s ease, filter 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
   cursor: pointer;
 }
 
@@ -206,6 +206,15 @@ body {
 .map-container svg path.highlighted {
   stroke: var(--accent-primary);
   stroke-width: 1;
+}
+
+/* Hovered state from sidebar list hover */
+.map-container svg .hovered path,
+.map-container svg path.hovered {
+  stroke: #ffffff !important;
+  stroke-width: 1.5 !important;
+  filter: drop-shadow(0 0 6px var(--accent-primary));
+  opacity: 0.95;
 }
 
 /* Country Heat Colors */
@@ -648,4 +657,137 @@ body {
   background: #d7202b;
   transform: translateY(-1px);
 }
+
+/* Changelog Modal Specific Styling */
+.changelog-modal-content {
+  max-width: 850px !important;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+}
+
+.changelog-body {
+  text-align: left;
+  margin-bottom: 24px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.changelog-intro {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-bottom: 16px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.changelog-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.changelog-grid .changelog-item:last-child {
+  grid-column: span 2;
+}
+
+.changelog-item {
+  display: flex;
+  gap: 14px;
+  background: var(--bg-tertiary);
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.changelog-emoji {
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.changelog-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.changelog-text strong {
+  display: block;
+  font-size: 14px;
+  color: var(--accent-primary);
+  margin-bottom: 4px;
+}
+
+.changelog-outro {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-top: 16px;
+  text-align: center;
+}
+
+.changelog-footer {
+  justify-content: center !important;
+  gap: 16px;
+}
+
+.review-btn-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  color: white;
+  border: none;
+  border-radius: 12px;
+  padding: 12px 24px;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(29, 155, 240, 0.3);
+}
+
+.review-btn-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(29, 155, 240, 0.45);
+}
+
+.changelog-image-wrapper {
+  margin-top: 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px;
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.changelog-preview-img {
+  max-height: 140px;
+  width: auto;
+  max-width: 100%;
+  border-radius: 4px;
+  display: block;
+}
+
+/* Responsiveness for Changelog Grid */
+@media (max-width: 768px) {
+  .changelog-modal-content {
+    max-width: 95% !important;
+    max-height: 95vh;
+  }
+  .changelog-grid {
+    grid-template-columns: 1fr;
+  }
+  .changelog-grid .changelog-item:last-child {
+    grid-column: span 1;
+  }
+}
+
 
