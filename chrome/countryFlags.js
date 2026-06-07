@@ -353,6 +353,7 @@ const COUNTRY_FLAGS = {
   "Africa": "🌍",
   "Sub-Saharan Africa": "🌍",
   "Asia": "🌏",
+  "West Asia": "🌏",
   "East Asia": "🌏",
   "East Asia & Pacific": "🌏",
   "South Asia": "🌏",
