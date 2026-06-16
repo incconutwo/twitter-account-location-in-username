@@ -656,15 +656,28 @@ async function processNode(container, screenName) {
       badge.appendChild(srcTag);
     }
 
-    // Find insertion point — next to the @handle
-    let anchor = nameWrap;
+    // Find insertion point — next to the @handle (as a sibling to the handle container to prevent truncation)
+    let anchor = null;
     const handle = `@${screenName.toLowerCase()}`;
     for (const leaf of nameWrap.querySelectorAll('*')) {
       if (leaf.children.length === 0 && leaf.textContent.toLowerCase().includes(handle)) {
-        if (leaf.parentElement) { anchor = leaf.parentElement; break; }
+        let curr = leaf;
+        while (curr && curr.parentElement && curr.parentElement !== nameWrap) {
+          curr = curr.parentElement;
+        }
+        if (curr && curr.parentElement === nameWrap) {
+          anchor = curr;
+        } else {
+          anchor = leaf.parentElement || nameWrap;
+        }
+        break;
       }
     }
-    anchor.appendChild(badge);
+    if (anchor && anchor !== nameWrap && anchor.parentElement === nameWrap) {
+      anchor.insertAdjacentElement('afterend', badge);
+    } else {
+      (anchor || nameWrap).appendChild(badge);
+    }
     container.dataset.tfDone = '1';
   } catch (_) {
     container.dataset.tfDone = 'miss';
@@ -963,7 +976,7 @@ async function boot() {
     const s = document.createElement('style');
     s.id = 'tf-style';
     s.textContent = `
-      .tf-flag { contain: layout style; margin: 0 4px; display: inline-flex; align-items: center; vertical-align: middle; height: 1.2em; gap: 3px; cursor: help; }
+      .tf-flag { contain: layout style; margin: 0 4px; display: inline-flex; align-items: center; vertical-align: middle; height: 1.2em; gap: 3px; cursor: help; flex-shrink: 0; }
       .tf-flag img { height: 1.2em; width: auto; display: block; pointer-events: none; }
       .tf-time { font-size: 11px; color: #71767b; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.2em; pointer-events: none; }
       #tf-tooltip {

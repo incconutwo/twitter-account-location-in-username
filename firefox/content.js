@@ -656,15 +656,28 @@ async function processNode(container, screenName) {
       badge.appendChild(srcTag);
     }
 
-    // Find insertion point — next to the @handle
-    let anchor = nameWrap;
+    // Find insertion point — next to the @handle (as a sibling to the handle container to prevent truncation)
+    let anchor = null;
     const handle = `@${screenName.toLowerCase()}`;
     for (const leaf of nameWrap.querySelectorAll('*')) {
       if (leaf.children.length === 0 && leaf.textContent.toLowerCase().includes(handle)) {
-        if (leaf.parentElement) { anchor = leaf.parentElement; break; }
+        let curr = leaf;
+        while (curr && curr.parentElement && curr.parentElement !== nameWrap) {
+          curr = curr.parentElement;
+        }
+        if (curr && curr.parentElement === nameWrap) {
+          anchor = curr;
+        } else {
+          anchor = leaf.parentElement || nameWrap;
+        }
+        break;
       }
     }
-    anchor.appendChild(badge);
+    if (anchor && anchor !== nameWrap && anchor.parentElement === nameWrap) {
+      anchor.insertAdjacentElement('afterend', badge);
+    } else {
+      (anchor || nameWrap).appendChild(badge);
+    }
     container.dataset.tfDone = '1';
   } catch (_) {
     container.dataset.tfDone = 'miss';
@@ -816,59 +829,65 @@ function pumpToast() {
   if (old) old.remove();
   const pct = Math.round((discoveredCount / total) * 100);
   const flagUrl = typeof getTwemojiUrl === 'function' ? getTwemojiUrl(flag) : null;
+  
   const el = document.createElement('div');
   el.className = 'tf-discovery-toast';
-
-  const headerDiv = document.createElement('div');
-  headerDiv.className = 'tf-toast-header';
-  const sparkleSpan = document.createElement('span');
-  sparkleSpan.className = 'tf-toast-sparkle';
-  sparkleSpan.textContent = '✨';
-  headerDiv.appendChild(sparkleSpan);
+  
+  const header = document.createElement('div');
+  header.className = 'tf-toast-header';
+  
+  const sparkle = document.createElement('span');
+  sparkle.className = 'tf-toast-sparkle';
+  sparkle.textContent = '✨';
+  header.appendChild(sparkle);
+  
   const headerText = document.createElement('span');
-  headerText.textContent = 'New Country Discovered!';
-  headerDiv.appendChild(headerText);
-  el.appendChild(headerDiv);
-
-  const countryDiv = document.createElement('div');
-  countryDiv.className = 'tf-toast-country';
+  headerText.textContent = ' New Country Discovered!';
+  header.appendChild(headerText);
+  el.appendChild(header);
+  
+  const country = document.createElement('div');
+  country.className = 'tf-toast-country';
+  
   const flagDiv = document.createElement('div');
   flagDiv.className = 'tf-toast-flag';
   if (flagUrl) {
-    const flagImg = document.createElement('img');
-    flagImg.src = flagUrl;
-    flagImg.alt = flag;
-    flagImg.style.width = '1em';
-    flagImg.style.height = '1em';
-    flagImg.style.display = 'block';
-    flagDiv.appendChild(flagImg);
+    const img = document.createElement('img');
+    img.src = flagUrl;
+    img.alt = flag;
+    img.style.width = '1em';
+    img.style.height = '1em';
+    img.style.display = 'block';
+    flagDiv.appendChild(img);
   } else {
     flagDiv.textContent = flag;
   }
-  countryDiv.appendChild(flagDiv);
-
+  country.appendChild(flagDiv);
+  
   const nameSpan = document.createElement('span');
   nameSpan.className = 'tf-toast-name';
   nameSpan.textContent = countryName;
-  countryDiv.appendChild(nameSpan);
-  el.appendChild(countryDiv);
-
-  const progressDiv = document.createElement('div');
-  progressDiv.className = 'tf-toast-progress';
-  const progressBar = document.createElement('div');
-  progressBar.className = 'tf-toast-progress-bar';
-  const progressFill = document.createElement('div');
-  progressFill.className = 'tf-toast-progress-fill';
-  progressFill.style.width = `${pct}%`;
-  progressBar.appendChild(progressFill);
-  progressDiv.appendChild(progressBar);
-
+  country.appendChild(nameSpan);
+  el.appendChild(country);
+  
+  const progress = document.createElement('div');
+  progress.className = 'tf-toast-progress';
+  
+  const bar = document.createElement('div');
+  bar.className = 'tf-toast-progress-bar';
+  
+  const fill = document.createElement('div');
+  fill.className = 'tf-toast-progress-fill';
+  fill.style.width = `${pct}%`;
+  bar.appendChild(fill);
+  progress.appendChild(bar);
+  
   const progressText = document.createElement('span');
   progressText.className = 'tf-toast-progress-text';
   progressText.textContent = `${discoveredCount}/${total}`;
-  progressDiv.appendChild(progressText);
-  el.appendChild(progressDiv);
-
+  progress.appendChild(progressText);
+  el.appendChild(progress);
+  
   document.body.appendChild(el);
   setTimeout(() => {
     el.classList.add('tf-toast-exit');
@@ -892,14 +911,16 @@ function pumpMilestoneToast() {
   const el = document.createElement('div');
   el.className = 'tf-milestone-toast';
 
+  // Programmatic confetti burst
   if (count >= 500) {
     const colors = ['#1d9bf0', '#00ba7c', '#f91880', '#ffd400', '#ff7a00'];
-    for(let i=0; i<40; i++) {
+    for (let i = 0; i < 40; i++) {
       const color = colors[Math.floor(Math.random() * colors.length)];
       const tx = (Math.random() - 0.5) * 400 + 'px';
       const ty = (Math.random() - 0.5) * 300 + 'px';
       const rot = Math.random() * 720 + 'deg';
       const delay = Math.random() * 0.2 + 's';
+      
       const confettiPiece = document.createElement('div');
       confettiPiece.className = 'tf-confetti-piece';
       confettiPiece.style.background = color;
@@ -907,46 +928,49 @@ function pumpMilestoneToast() {
       confettiPiece.style.setProperty('--ty', ty);
       confettiPiece.style.setProperty('--rot', rot);
       confettiPiece.style.animationDelay = delay;
+      
       el.appendChild(confettiPiece);
     }
   }
 
-  const brandDiv = document.createElement('div');
-  brandDiv.className = 'tf-source-brand';
-  brandDiv.style.position = 'relative';
-  brandDiv.style.zIndex = '1';
-  brandDiv.textContent = 'Location Flag & Blocker';
-  el.appendChild(brandDiv);
+  const brand = document.createElement('div');
+  brand.className = 'tf-source-brand';
+  brand.style.position = 'relative';
+  brand.style.zIndex = '1';
+  brand.textContent = 'Location Flag & Blocker';
+  el.appendChild(brand);
 
-  const headerDiv = document.createElement('div');
-  headerDiv.className = 'tf-toast-header';
-  headerDiv.style.justifyContent = 'center';
-  headerDiv.style.position = 'relative';
-  headerDiv.style.zIndex = '1';
-  const sparkleSpan = document.createElement('span');
-  sparkleSpan.className = 'tf-toast-sparkle';
-  sparkleSpan.textContent = '🏆';
-  headerDiv.appendChild(sparkleSpan);
+  const header = document.createElement('div');
+  header.className = 'tf-toast-header';
+  header.style.justifyContent = 'center';
+  header.style.position = 'relative';
+  header.style.zIndex = '1';
+  
+  const sparkle = document.createElement('span');
+  sparkle.className = 'tf-toast-sparkle';
+  sparkle.textContent = '🏆';
+  header.appendChild(sparkle);
+
   const headerText = document.createElement('span');
-  headerText.textContent = 'Milestone Reached!';
-  headerDiv.appendChild(headerText);
-  el.appendChild(headerDiv);
+  headerText.textContent = ' Milestone Reached!';
+  header.appendChild(headerText);
+  el.appendChild(header);
 
-  const messageDiv = document.createElement('div');
-  messageDiv.className = 'tf-milestone-message';
-  messageDiv.style.position = 'relative';
-  messageDiv.style.zIndex = '1';
-  messageDiv.textContent = message;
-  el.appendChild(messageDiv);
+  const msg = document.createElement('div');
+  msg.className = 'tf-milestone-message';
+  msg.style.position = 'relative';
+  msg.style.zIndex = '1';
+  msg.textContent = message;
+  el.appendChild(msg);
 
-  const actionLink = document.createElement('a');
-  actionLink.href = url;
-  actionLink.target = '_blank';
-  actionLink.className = 'tf-milestone-btn';
-  actionLink.style.position = 'relative';
-  actionLink.style.zIndex = '1';
-  actionLink.textContent = buttonText;
-  el.appendChild(actionLink);
+  const btn = document.createElement('a');
+  btn.href = url;
+  btn.target = '_blank';
+  btn.className = 'tf-milestone-btn';
+  btn.style.position = 'relative';
+  btn.style.zIndex = '1';
+  btn.textContent = buttonText;
+  el.appendChild(btn);
 
   document.body.appendChild(el);
   setTimeout(() => {
@@ -1043,7 +1067,7 @@ async function boot() {
     const s = document.createElement('style');
     s.id = 'tf-style';
     s.textContent = `
-      .tf-flag { contain: layout style; margin: 0 4px; display: inline-flex; align-items: center; vertical-align: middle; height: 1.2em; gap: 3px; cursor: help; }
+      .tf-flag { contain: layout style; margin: 0 4px; display: inline-flex; align-items: center; vertical-align: middle; height: 1.2em; gap: 3px; cursor: help; flex-shrink: 0; }
       .tf-flag img { height: 1.2em; width: auto; display: block; pointer-events: none; }
       .tf-time { font-size: 11px; color: #71767b; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.2em; pointer-events: none; }
       #tf-tooltip {

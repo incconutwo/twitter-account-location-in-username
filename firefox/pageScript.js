@@ -70,28 +70,43 @@
     const originalPush = window.webpackChunk_twitter_responsive_web.push;
     window.webpackChunk_twitter_responsive_web.push = function(...args) {
       for (const arg of args) {
-        try {
-          checkAndSet(arg);
-        } catch (e) {}
+        if (!queryIdDiscovered) {
+          if (window.requestIdleCallback) {
+            window.requestIdleCallback(() => {
+              try { checkAndSet(arg); } catch(e) {}
+            });
+          } else {
+            setTimeout(() => {
+              try { checkAndSet(arg); } catch(e) {}
+            }, 1);
+          }
+        }
       }
       return originalPush.apply(this, args);
     };
 
-    // Scan already loaded chunks
-    try {
-      const chunks = window.webpackChunk_twitter_responsive_web;
-      for (const chunk of chunks) {
-        if (chunk && chunk[1]) {
-          const qId = scanWebpackSource(chunk[1]);
-          if (qId) {
-            activeQueryId = qId;
-            queryIdDiscovered = true;
-            sendToContent('__queryIdDiscovered', { queryId: activeQueryId });
-            break;
+    // Scan already loaded chunks asynchronously
+    if (!queryIdDiscovered) {
+      const scanLoaded = () => {
+        try {
+          const chunks = window.webpackChunk_twitter_responsive_web;
+          for (const chunk of chunks) {
+            if (chunk && chunk[1]) {
+              const qId = scanWebpackSource(chunk[1]);
+              if (qId) {
+                activeQueryId = qId;
+                queryIdDiscovered = true;
+                sendToContent('__queryIdDiscovered', { queryId: activeQueryId });
+                break;
+              }
+            }
           }
-        }
-      }
-    } catch (e) {}
+        } catch (e) {}
+      };
+      
+      if (window.requestIdleCallback) window.requestIdleCallback(scanLoaded);
+      else setTimeout(scanLoaded, 1);
+    }
   }
 
   // Start intercepting and scanning Webpack chunks immediately
@@ -101,58 +116,66 @@
   
   // Skip keys known to never contain user objects — saves CPU on deep traversal
   const SKIP_KEYS = new Set(['instructions', 'globalObjects', 'promoted_content', 'card', 'media', 'entities', 'extended_entities', 'features', 'mediaStats', 'birdwatch_pivot', 'tombstone']);
-  const MAX_DEPTH = 15;
+  // Iteratively find user objects in arbitrary JSON (Timeline data) using a stack
+  function extractUsersFromResponse(data) {
+    const usersFound = new Map();
+    if (!data || typeof data !== 'object') return usersFound;
 
-  // Recursively find user objects in arbitrary JSON (Timeline data)
-  function extractUsersFromResponse(data, usersFound = new Map(), depth = 0) {
-    if (!data || typeof data !== 'object' || depth > MAX_DEPTH) return usersFound;
+    const stack = [data];
+    
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current || typeof current !== 'object') continue;
 
-    // Check if this object looks like a User result
-    if (data.screen_name && (data.location || data.verified || data.is_blue_verified || data.about_profile)) {
-      if (!usersFound.has(data.screen_name)) {
-        const profile = data.about_profile;
-        usersFound.set(data.screen_name, {
-          screen_name: data.screen_name,
-          location: profile?.account_based_in || data.location || data.legacy?.location || null,
-          verified: !!(data.verified || data.is_blue_verified || data.legacy?.verified || data.legacy?.verified_type || data.verification_info?.is_identity_verified),
-          utc_offset: data.utc_offset ?? data.legacy?.utc_offset ?? null,
-          time_zone: data.time_zone ?? data.legacy?.time_zone ?? null,
-          is_region: profile?.location_accurate === false
-        });
-      }
-    }
-    // Also check legacy format
-    if (data.legacy && data.legacy.screen_name) {
-      const u = data.legacy;
-      if (!usersFound.has(u.screen_name)) {
-        // Legacy objects usually don't have about_profile, but checking just in case
-        const profile = data.about_profile;
-        usersFound.set(u.screen_name, {
-          screen_name: u.screen_name,
-          location: profile?.account_based_in || u.location || null,
-          verified: !!(u.verified || data.is_blue_verified || u.verified_type || data.verification_info?.is_identity_verified),
-          utc_offset: u.utc_offset ?? data.utc_offset ?? null,
-          time_zone: u.time_zone ?? data.time_zone ?? null,
-          is_region: profile?.location_accurate === false
-        });
-      }
-    }
-
-    // Traverse arrays and objects
-    if (Array.isArray(data)) {
-      for (const item of data) extractUsersFromResponse(item, usersFound, depth + 1);
-    } else {
-      const keys = Object.keys(data);
-      for (const key of keys) {
-        if (SKIP_KEYS.has(key)) {
-          // Special handler for globalObjects.users
-          if (key === 'globalObjects' && data.globalObjects?.users) {
-            Object.values(data.globalObjects.users).forEach(u => extractUsersFromResponse(u, usersFound, depth + 1));
-          }
-          continue;
+      // Check if this object looks like a User result
+      if (current.screen_name && (current.location || current.verified || current.is_blue_verified || current.about_profile)) {
+        if (!usersFound.has(current.screen_name)) {
+          const profile = current.about_profile;
+          usersFound.set(current.screen_name, {
+            screen_name: current.screen_name,
+            location: profile?.account_based_in || current.location || current.legacy?.location || null,
+            verified: !!(current.verified || current.is_blue_verified || current.legacy?.verified || current.legacy?.verified_type || current.verification_info?.is_identity_verified),
+            utc_offset: current.utc_offset ?? current.legacy?.utc_offset ?? null,
+            time_zone: current.time_zone ?? current.legacy?.time_zone ?? null,
+            is_region: profile?.location_accurate === false
+          });
         }
-        if (data[key] && typeof data[key] === 'object') {
-          extractUsersFromResponse(data[key], usersFound, depth + 1);
+      }
+      // Also check legacy format
+      if (current.legacy && current.legacy.screen_name) {
+        const u = current.legacy;
+        if (!usersFound.has(u.screen_name)) {
+          // Legacy objects usually don't have about_profile, but checking just in case
+          const profile = current.about_profile;
+          usersFound.set(u.screen_name, {
+            screen_name: u.screen_name,
+            location: profile?.account_based_in || u.location || null,
+            verified: !!(u.verified || current.is_blue_verified || u.verified_type || current.verification_info?.is_identity_verified),
+            utc_offset: u.utc_offset ?? current.utc_offset ?? null,
+            time_zone: u.time_zone ?? current.time_zone ?? null,
+            is_region: profile?.location_accurate === false
+          });
+        }
+      }
+
+      // Traverse arrays and objects
+      if (Array.isArray(current)) {
+        for (let i = 0; i < current.length; i++) {
+          stack.push(current[i]);
+        }
+      } else {
+        for (const key in current) {
+          const val = current[key];
+          if (val && typeof val === 'object') {
+            if (SKIP_KEYS.has(key)) {
+              // Special handler for globalObjects.users
+              if (key === 'globalObjects' && val.users) {
+                stack.push(val.users);
+              }
+              continue;
+            }
+            stack.push(val);
+          }
         }
       }
     }
