@@ -272,9 +272,10 @@ function setupShareButton(totalScanned, countryArray, totalCountries) {
   if (!btn) return;
   
   btn.addEventListener('click', () => {
-    const top3 = countryArray.slice(0, 3).map((c, i) => `${i+1}. ${c.flag} ${c.country}: ${formatCount(c.count)}`).join('\n');
+    const rankEmojis = ['🥇', '🥈', '🥉'];
+    const top3 = countryArray.slice(0, 3).map((c, i) => `${rankEmojis[i]} ${c.flag} ${c.country} (${formatCount(c.count)} users)`).join('\n');
     
-    const text = `My X Feed Geography 🌍\nI've spotted users from ${totalCountries} countries on my feed so far!\n\nTop locations:\n${top3}\n\nTrack yours: https://chromewebstore.google.com/detail/xtwitter-country-flags-bl/dgodabjkaifjlhpcapiohikkklnailla\n\n#TwitterGeography #OpenSource`;
+    const text = `🛂 My X Feed Passport is getting stamped!\nI've discovered users from ${totalCountries}/195 countries on my timeline.\n\nMy top locations:\n${top3}\n\nTrack your feed geography: https://addons.mozilla.org/en-US/firefox/addon/x-twitter-flags-blocker/\n\n#DataViz #OpenSource`;
     
     const url = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text);
     const width = 600;

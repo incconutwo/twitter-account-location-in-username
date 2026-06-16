@@ -4,13 +4,14 @@ A browser extension that displays the country flag of X.com (Twitter) users next
 
 > **Enjoying the extension?** Please consider dropping a **Star ⭐** on this repository to show your support! It helps visibility a ton.
 
-# 🆕 What's New in v1.2.0
+# 🆕 What's New in v1.2.1
 
-We've just released Version 1.2.0! Here are the main highlights:
-* **Interactive Dashboard 📊**: Track your feed demographics on a global vector heat-map.
-* **Local Time & Timezone Detection 🕒**: Automatically displays user local times next to flags, including night indicators (🌙).
-* **Passport Mode 🛂**: Get real-time toast notifications when you discover new countries on your timeline.
-* **IndexedDB Caching ⚡**: Under-the-hood optimization for faster, unlimited location caching.
+We've just released Version 1.2.1! Here are the main highlights:
+* **Asynchronous Webpack Interception 📡**: Offloads chunk parsing and scanning to idle periods (`requestIdleCallback`) to prevent main thread blockage during page load.
+* **Iterative Payload Parser 🏎️**: Stack-based parsing refactoring to eliminate call stack limits on deeply nested API data.
+* **Anti-Truncation Badges & Styles 📐**: Sibling DOM placement next to handles prevents X's React engine from truncating flags, and added flex-shrink guards.
+* **Platform-Specific Add-on Support 🦊**: Native Firefox Add-on review links and store redirection URLs integrated directly into the Firefox build.
+* **Standardized Debug Controls 🔧**: Standardized developer debug panel click activation timeouts across all platforms.
 
 👉 *See the full technical updates and previous history in the [CHANGELOG.md](https://github.com/incconutwo/twitter-account-location-in-username/blob/main/CHANGELOG.md).*
 

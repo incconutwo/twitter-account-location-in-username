@@ -582,10 +582,19 @@ function init() {
       });
     }
     
+    let clickCount = 0;
+    let clickTimeout = null;
     const headerTitle = document.querySelector('h1');
     if (headerTitle) {
-      headerTitle.addEventListener('click', (e) => {
-        if (e.detail === 5) {
+      headerTitle.addEventListener('click', () => {
+        clickCount++;
+        if (clickTimeout) clearTimeout(clickTimeout);
+        clickTimeout = setTimeout(() => {
+          clickCount = 0;
+        }, 1000);
+
+        if (clickCount === 5) {
+          clickCount = 0;
           chrome.storage.local.get(DEBUG_STORAGE_KEY, (curr) => {
             const newDebug = !curr[DEBUG_STORAGE_KEY];
             const updates = { [DEBUG_STORAGE_KEY]: newDebug };

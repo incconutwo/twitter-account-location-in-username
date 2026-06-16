@@ -2,6 +2,35 @@
 
 All notable changes to the **X/Twitter Location Flags, Time & Blocker** extension will be documented in this file.
 
+## [1.2.1] - 2026-06-16
+
+### 🚀 New Features & Capabilities
+
+*   **Platform-Specific Add-on Support 🦊:**
+    *   Replaced Chrome Web Store URLs inside the Firefox build with native Firefox Add-on listing review links (`addons.mozilla.org`), standardizing review prompts for Firefox users.
+*   **Dashboard Share Template Redesign 📊:**
+    *   Redesigned the X/Twitter share template to use rank emojis (`🥇`, `🥈`, `🥉`) for the top 3 countries instead of text numbering and updated the post copy to a passport-themed message (`"🛂 My X Feed Passport is getting stamped!"`). Standardized the target URL in the sharing link for both Chrome and Firefox.
+
+### ⚡ Performance & Improvements
+
+*   **Asynchronous Webpack Interception 📡:**
+    *   Wrapped Webpack push scanning (`checkAndSet`) and initial chunk parsing inside `window.requestIdleCallback` (falling back to a 1ms `setTimeout`). This offloads chunk parsing to idle periods and prevents main thread blockage during page load.
+*   **Iterative Payload Parser 🏎️:**
+    *   Refactored the raw JSON crawler (`extractUsersFromResponse`) from a recursive implementation to an iterative stack-based approach, eliminating call stack limits on deeply nested API responses.
+*   **Reliable Debug Mode Activation 🔧:**
+    *   Replaced reliance on native browser click-sequence logic (`e.detail === 5`) with a custom programmatic click counter and a 1-second reset window, making developer tools activation reliable across all platforms.
+
+### 🛠️ Fixes & Stability
+
+*   **Anti-Truncation Badge Injection 🛡️:**
+    *   Updated the DOM insertion routine for location badges inside `content.js`. Rather than appending flags directly to the username container (`nameWrap`), the injection locates the top-level child element next to the user's handle and inserts the badge as a sibling using `insertAdjacentElement('afterend')`. This prevents X's React rendering engine from truncating the badges.
+*   **Flag Layout Flex-Shrink Prevention 📐:**
+    *   Added `flex-shrink: 0;` to the `.tf-flag` CSS rule to prevent location flags from shrinking/squeezing in compact flex layouts.
+*   **Code Standardizations 🧹:**
+    *   Cleaned up redundant DOM element suffixes and standardized variable declarations inside `firefox/content.js` toast creation methods (`showDiscoveryToast` and `showMilestoneToast`).
+
+---
+
 ## [1.2.0] - 2026-06-07
 
 **Name Change:** The extension has been renamed to **"X/Twitter Location Flags, Time & Blocker"** to reflect the powerful new features introduced in this release.
