@@ -1,6 +1,7 @@
 // Popup script
 const TOGGLE_KEY = 'extension_enabled';
 const BLOCKED_COUNTRIES_KEY = 'blocked_countries';
+const WHITELISTED_ACCOUNTS_KEY = 'whitelisted_accounts';
 const VERIFIED_ONLY_KEY = 'verified_only_mode';
 const AUTO_BLOCK_KEY = 'auto_block_mode';
 const PASSPORT_MODE_KEY = 'passport_mode';
@@ -17,6 +18,7 @@ const ALWAYS_LOAD_COMMENTS_KEY = 'always_load_comments';
 let els = {};
 
 let blockedCountries = [];
+let whitelistedAccounts = [];
 let isDropdownLoaded = false;
 
 // --- Helpers ---
@@ -275,6 +277,64 @@ function renderBlockedList() {
   els.list.appendChild(fragment);
 }
 
+// --- Whitelist Functions ---
+
+function addWhitelistedAccount(username) {
+  const cleaned = username.trim().toLowerCase().replace(/^@/, '');
+  if (!cleaned) return false;
+  if (whitelistedAccounts.includes(cleaned)) return false;
+  
+  whitelistedAccounts.push(cleaned);
+  chrome.storage.local.set({ [WHITELISTED_ACCOUNTS_KEY]: whitelistedAccounts }, () => {
+    notifyContentScript({ type: 'whitelistedAccountsUpdate', accounts: whitelistedAccounts });
+  });
+  renderWhitelistedList();
+  return true;
+}
+
+function removeWhitelistedAccount(username) {
+  whitelistedAccounts = whitelistedAccounts.filter(a => a !== username);
+  chrome.storage.local.set({ [WHITELISTED_ACCOUNTS_KEY]: whitelistedAccounts }, () => {
+    notifyContentScript({ type: 'whitelistedAccountsUpdate', accounts: whitelistedAccounts });
+  });
+  renderWhitelistedList();
+}
+
+function renderWhitelistedList() {
+  els.whitelistList.textContent = '';
+  if (whitelistedAccounts.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'empty-msg';
+    empty.textContent = 'No accounts whitelisted';
+    els.whitelistList.appendChild(empty);
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  whitelistedAccounts.forEach(account => {
+    const chip = document.createElement('div');
+    chip.className = 'chip whitelist-chip';
+    
+    const icon = document.createElement('span');
+    icon.className = 'whitelist-chip-icon';
+    icon.textContent = '@';
+    chip.appendChild(icon);
+    
+    chip.appendChild(document.createTextNode(account));
+    
+    const removeBtn = document.createElement('span');
+    removeBtn.className = 'chip-remove';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove';
+    removeBtn.onclick = (e) => {
+      e.stopPropagation();
+      removeWhitelistedAccount(account);
+    };
+    chip.appendChild(removeBtn);
+    fragment.appendChild(chip);
+  });
+  els.whitelistList.appendChild(fragment);
+}
+
 function populateDropdown() {
   if (isDropdownLoaded || typeof COUNTRY_FLAGS === 'undefined') return;
   
@@ -482,7 +542,10 @@ function init() {
     verifiedOnly: document.getElementById('verifiedOnlyToggle'),
     autoBlock: document.getElementById('autoBlockToggle'),
     passportMode: document.getElementById('passportModeToggle'),
-    alwaysLoadComments: document.getElementById('alwaysLoadCommentsToggle')
+    alwaysLoadComments: document.getElementById('alwaysLoadCommentsToggle'),
+    whitelistInput: document.getElementById('whitelistInput'),
+    whitelistAddBtn: document.getElementById('addWhitelistBtn'),
+    whitelistList: document.getElementById('whitelistedAccountsList')
   };
 
   // Verify critical elements exist
@@ -491,13 +554,16 @@ function init() {
     return;
   }
 
-  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, PASSPORT_MODE_KEY, ALWAYS_LOAD_COMMENTS_KEY, STATS_KEY, 'has_rated', 'dismissed_rating'], (res) => {
+  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, WHITELISTED_ACCOUNTS_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, PASSPORT_MODE_KEY, ALWAYS_LOAD_COMMENTS_KEY, STATS_KEY, 'has_rated', 'dismissed_rating'], (res) => {
     // 1. Setup State
     const isEnabled = res[TOGGLE_KEY] !== undefined ? res[TOGGLE_KEY] : DEFAULT_ENABLED;
     updateToggle(isEnabled);
     
     blockedCountries = Array.isArray(res[BLOCKED_COUNTRIES_KEY]) ? res[BLOCKED_COUNTRIES_KEY] : [];
     renderBlockedList();
+    
+    whitelistedAccounts = Array.isArray(res[WHITELISTED_ACCOUNTS_KEY]) ? res[WHITELISTED_ACCOUNTS_KEY] : [];
+    renderWhitelistedList();
     
     // Setup new toggles
     if (res[VERIFIED_ONLY_KEY]) els.verifiedOnly.classList.add('enabled');
@@ -571,6 +637,22 @@ function init() {
       if (!isDropdownLoaded) populateDropdown();
       els.select.classList.toggle('open');
     });
+
+    // Whitelist add button and Enter key
+    if (els.whitelistAddBtn && els.whitelistInput) {
+      els.whitelistAddBtn.addEventListener('click', () => {
+        if (addWhitelistedAccount(els.whitelistInput.value)) {
+          els.whitelistInput.value = '';
+        }
+      });
+      els.whitelistInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          if (addWhitelistedAccount(els.whitelistInput.value)) {
+            els.whitelistInput.value = '';
+          }
+        }
+      });
+    }
 
     window.addEventListener('click', () => els.select.classList.remove('open'));
     
