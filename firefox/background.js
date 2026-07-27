@@ -1,7 +1,7 @@
 // Centralized Settings Manager
 // Settings are loaded once here and shared with all content scripts via messaging
 
-const SETTINGS_KEYS = ['extension_enabled', 'blocked_countries', 'verified_only_mode', 'auto_block_mode', 'passport_mode', 'dev_data_source', 'always_load_comments'];
+const SETTINGS_KEYS = ['extension_enabled', 'blocked_countries', 'whitelisted_accounts', 'verified_only_mode', 'auto_block_mode', 'passport_mode', 'dev_data_source', 'always_load_comments'];
 const STATS_KEY = 'extension_stats';
 const TOTAL_COUNTRIES = 195;
 
@@ -15,6 +15,7 @@ async function loadSettings() {
   cachedSettings = {
     extension_enabled: result.extension_enabled ?? true,
     blocked_countries: result.blocked_countries || [],
+    whitelisted_accounts: result.whitelisted_accounts || [],
     verified_only_mode: result.verified_only_mode ?? false,
     auto_block_mode: result.auto_block_mode ?? false,
     passport_mode: result.passport_mode ?? true,

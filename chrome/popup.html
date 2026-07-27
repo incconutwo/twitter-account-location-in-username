@@ -233,6 +233,50 @@
       background-color: rgba(0,0,0,0.1);
       color: #0f1419;
     }
+    .whitelist-chip {
+      background: #e8f5e9;
+      border-color: #a5d6a7;
+    }
+    .whitelist-chip-icon {
+      color: #2e7d32;
+      font-weight: 700;
+      margin-right: 2px;
+      font-size: 11px;
+    }
+    .whitelist-input-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .whitelist-input {
+      flex: 1;
+      padding: 6px 10px;
+      font-size: 12px;
+      border: 1px solid #cfd9de;
+      border-radius: 4px;
+      outline: none;
+      font-family: inherit;
+      color: #0f1419;
+      background: #fff;
+    }
+    .whitelist-input:focus {
+      border-color: #1d9bf0;
+    }
+    .whitelist-add-btn {
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      background: #1d9bf0;
+      color: #fff;
+      white-space: nowrap;
+      transition: opacity 0.2s;
+    }
+    .whitelist-add-btn:hover {
+      opacity: 0.85;
+    }
     .info {
       font-size: 12px;
       color: #536471;
@@ -345,6 +389,14 @@
         color: #f7f9f9;
       }
       
+      .whitelist-chip {
+        background: rgba(46, 125, 50, 0.2);
+        border-color: #2e7d32;
+      }
+      .whitelist-chip-icon {
+        color: #66bb6a;
+      }
+      
       .chip-remove {
         color: #8b98a5;
       }
@@ -361,6 +413,15 @@
       .info, .empty-msg {
         color: #8b98a5;
         border-top-color: #38444d;
+      }
+      
+      .whitelist-input {
+        background: #1e2732;
+        border-color: #38444d;
+        color: #f7f9f9;
+      }
+      .whitelist-input:focus {
+        border-color: #1d9bf0;
       }
       
       /* Stats Dark Mode */
@@ -636,7 +697,15 @@
   </div>
     
   <div id="blockedList" class="blocked-list"></div>
-  
+
+  <div class="section-title" style="margin-top: 16px;">Whitelisted Accounts</div>
+  <div class="whitelist-input-row">
+    <input type="text" id="whitelistInput" class="whitelist-input" placeholder="@username" autocomplete="off" spellcheck="false">
+    <button id="addWhitelistBtn" class="whitelist-add-btn">Add</button>
+  </div>
+  <div id="whitelistedAccountsList" class="blocked-list" style="margin-top: 6px;"></div>
+  <div class="info">Whitelisted accounts will still show their posts even when their country is blocked.</div>
+
   <div class="section-title" style="margin-top: 16px;">Filter Options</div>
   
   <div class="toggle-container">

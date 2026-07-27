@@ -28,6 +28,7 @@ const ELEMENT_SELECTORS =
 // ─────────────────────────────────────────────────────────────
 let enabled         = true;
 let filteredRegions = [];
+let whitelistedUsers = [];  // screenNames that bypass country blocking
 let onlyVerified    = false;
 let autoFilter      = false;
 let discoveryOn     = true;
@@ -581,8 +582,8 @@ async function processNode(container, screenName) {
     const tz   = data?.timezone ?? null;
     const reg  = data?.isRegion ?? false;
 
-    // Blocked-region filter
-    if (filteredRegions.length && loc) {
+    // Blocked-region filter (skip if user is whitelisted)
+    if (filteredRegions.length && loc && !whitelistedUsers.includes(screenName.toLowerCase())) {
       const lc = loc.toLowerCase();
       const blocked  = filteredRegions.some(r => lc.includes(r));
       const doFilter = blocked && (!onlyVerified || ver);
@@ -1025,6 +1026,12 @@ function parseRegions(input) {
   else filteredRegions = input.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 }
 
+function parseWhitelist(input) {
+  if (!input) whitelistedUsers = [];
+  else if (Array.isArray(input)) whitelistedUsers = input.map(s => s.toLowerCase().replace(/^@/, ''));
+  else whitelistedUsers = input.split(',').map(s => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean);
+}
+
 // Stats / tracking helpers
 function bumpStat(kind) { if (!gone()) chrome.runtime.sendMessage({ type: 'incrementStat', statType: kind }); }
 function spotCountry(name, flag) { if (!name || !flag || gone()) return; chrome.runtime.sendMessage({ type: 'countrySpotted', country: name, flag }); }
@@ -1049,6 +1056,7 @@ async function boot() {
     devDataSource = cfg.dev_data_source || 'auto';
     alwaysLoadComments = cfg.always_load_comments ?? false;
     if (cfg.blocked_countries) parseRegions(cfg.blocked_countries);
+    if (cfg.whitelisted_accounts) parseWhitelist(cfg.whitelisted_accounts);
     const local = await disk.read(['submission_history', 'dev_show_source_banner', '_tf_query_id']);
     submittedHistory = new Set(local.submission_history || []);
     devShowSourceBanner = local.dev_show_source_banner ?? false;
@@ -1199,6 +1207,7 @@ async function boot() {
       devDataSource = s.dev_data_source || devDataSource;
       alwaysLoadComments = s.always_load_comments ?? alwaysLoadComments;
       if (s.blocked_countries) parseRegions(s.blocked_countries);
+      if (s.whitelisted_accounts) parseWhitelist(s.whitelisted_accounts);
     } else if (msg.type === 'alwaysLoadCommentsUpdate') {
       alwaysLoadComments = msg.enabled;
     } else if (msg.type === 'devDataSourceUpdate') {
@@ -1212,6 +1221,8 @@ async function boot() {
       showMilestoneToast({ count: msg.count, message: msg.message, buttonText: msg.buttonText, url: msg.url });
     } else if (msg.type === 'blockedCountriesUpdate') {
       parseRegions(msg.countries);
+    } else if (msg.type === 'whitelistedAccountsUpdate') {
+      parseWhitelist(msg.accounts);
     } else if (msg.type === 'verifiedOnlyUpdate') {
       onlyVerified = msg.enabled;
     } else if (msg.type === 'autoBlockUpdate') {
