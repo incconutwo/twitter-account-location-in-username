@@ -2,21 +2,21 @@
 //  Config
 // ─────────────────────────────────────────────────────────────
 const API_ENDPOINT = 'https://twitter-countries-api.tnemoroccan.workers.dev';
-const EXPIRY_DAYS       = 30;
-const STALE_WINDOW_DAYS = 90;
+const EXPIRY_DAYS       = 90;
+const STALE_WINDOW_DAYS = 120;
 const EXPIRY_EMPTY_DAYS = 14;
-const STORE_LIMIT       = 5000;
-const MEMORY_CACHE_LIMIT = 500;
+const STORE_LIMIT       = 10000;
+const MEMORY_CACHE_LIMIT = 1000;
 const CLOUD_BATCH_MAX   = 50;
-const MISS_TTL          = 1800_000;      // 30 min cooldown for failed/not found users
+const MISS_TTL          = 86_400_000;    // 24h cooldown for failed/not found users
 const DRAIN_INTERVAL    = 60;            // ms – micro-batch MutationObserver events
 const TWITTER_PARALLEL  = 3;
 const TWITTER_STAGGER_MS = 1000; // Paced delay between Twitter lookup batches to prevent 429 rate limits
-const LAZY_DELAY_MS     = 400;  // Debounce: ignore elements scrolled past quickly
-const SUBMIT_FLUSH_MS   = 30_000;        // auto-flush cloud submissions
+const LAZY_DELAY_MS     = 600;  // Debounce: ignore elements scrolled past quickly
+const SUBMIT_FLUSH_MS   = 300_000;       // 5 min auto-flush cloud submissions
 const CLOCK_TICK_MS     = 60_000;        // local-time refresh interval
 const COUNTRY_TOTAL     = 195;
-const NEGATIVE_MAP_CAP  = 2000;          // max negative cache entries
+const NEGATIVE_MAP_CAP  = 5000;          // max negative cache entries
 const CLOUD_BACKOFF_BASE = 1000;         // base backoff ms for cloud failures
 const CLOUD_BACKOFF_MAX  = 60_000;       // max backoff ms
 
@@ -184,6 +184,13 @@ async function hydrate() {
     const now = Date.now();
     const staleEdge = now - STALE_WINDOW_DAYS * 86_400_000;
     const toDelete = [];
+    let needsOneTimeNullClean = false;
+    try {
+      if (!localStorage.getItem('_tf_null_cleaned_v1')) {
+        needsOneTimeNullClean = true;
+        localStorage.setItem('_tf_null_cleaned_v1', '1');
+      }
+    } catch (_) {}
     
     return new Promise((resolve) => {
       const txn = db.transaction(STORE_NAME, 'readonly');
@@ -194,7 +201,7 @@ async function hydrate() {
         const cursor = e.target.result;
         if (cursor) {
           const entry = cursor.value;
-          if (entry.expiry <= staleEdge || !entry.location) {
+          if (entry.expiry <= staleEdge || (needsOneTimeNullClean && !entry.location)) {
             toDelete.push(entry.username);
           }
           cursor.continue();

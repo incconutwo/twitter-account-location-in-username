@@ -130,7 +130,7 @@ const MILESTONE_CONFIGS = {
   100: {
     message: "100 spam posts hidden! Your timeline is looking cleaner.\n\nMind leaving a quick review to help others find us?",
     buttonText: "Leave a Review",
-    url: "https://addons.mozilla.org/en-US/firefox/addon/x-twitter-flags-blocker/reviews/?utm_source=milestone100"
+    url: "https://chromewebstore.google.com/detail/xtwitter-country-flags-bl/dgodabjkaifjlhpcapiohikkklnailla/reviews?utm_source=milestone100"
   },
   500: {
     message: "Whoa! You've officially hidden 500 spam posts.\n\nOur Cloudflare database processes thousands of requests daily to keep your feed clean. Support with $5 on Ko-fi to unlock Lifetime Pro!",
