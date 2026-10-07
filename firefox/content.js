@@ -10,8 +10,8 @@ const MEMORY_CACHE_LIMIT = 500;
 const CLOUD_BATCH_MAX   = 50;
 const MISS_TTL          = 1800_000;      // 30 min cooldown for failed/not found users
 const DRAIN_INTERVAL    = 60;            // ms – micro-batch MutationObserver events
-const TWITTER_PARALLEL  = 1;
-const TWITTER_STAGGER_MS = 3000; // Paced delay between Twitter lookup batches to prevent 429 rate limits
+const TWITTER_PARALLEL  = 3;
+const TWITTER_STAGGER_MS = 1000; // Paced delay between Twitter lookup batches to prevent 429 rate limits
 const LAZY_DELAY_MS     = 400;  // Debounce: ignore elements scrolled past quickly
 const SUBMIT_FLUSH_MS   = 30_000;        // auto-flush cloud submissions
 const CLOCK_TICK_MS     = 60_000;        // local-time refresh interval
@@ -34,6 +34,8 @@ let discoveryOn     = true;
 let devDataSource   = 'auto';
 let devShowSourceBanner = false;
 let alwaysLoadComments = false;
+let blockVpnMode    = false;
+let bypassFollowedMode = true;
 let rateLimitUntil  = 0;
 
 // Queues / flags
@@ -51,6 +53,8 @@ const twitterPending   = [];         // { screenName, resolve, reject }
 const submitBuffer     = [];
 let   submitTimer      = null;
 const submittedSession = new Set();
+const blockedUsersSession = new Set();
+const autoBlockedUsersSession = new Set();
 let   submittedHistory = new Set();
 let   watcherRef       = null;       // MutationObserver handle
 
@@ -190,7 +194,7 @@ async function hydrate() {
         const cursor = e.target.result;
         if (cursor) {
           const entry = cursor.value;
-          if (entry.expiry <= staleEdge) {
+          if (entry.expiry <= staleEdge || !entry.location) {
             toDelete.push(entry.username);
           }
           cursor.continue();
@@ -207,37 +211,53 @@ async function hydrate() {
   } catch (_) {}
 }
 
-function record(username, location, verified = false, apiTz = null, isRegion = false) {
+function record(username, location, verified = false, apiTz = null, isRegion = false, following = false) {
   if (gone()) return;
   const userKey = username.toLowerCase();
   const existing = dataMap.get(userKey);
 
-  let finalLocation = location;
+  // Sanitize: any non-empty location string that does not map to a country flag is treated as null
+  let finalLocation = (location && !getCountryFlag(location)) ? null : location;
   let finalVerified = verified;
   let finalIsRegion = isRegion;
   let finalTz = apiTz;
+  let finalFollowing = following;
 
   if (existing) {
-    const newIsInvalid = location && !getCountryFlag(location);
-    const existingIsValid = existing.location && getCountryFlag(existing.location);
-    const existingIsNull = existing.location === null;
-
-    if (newIsInvalid && (existingIsValid || existingIsNull)) {
+    const existingHasValidLoc = Boolean(existing.location && getCountryFlag(existing.location));
+    if (!finalLocation && existingHasValidLoc) {
+      // Never overwrite a known valid country with null/undefined
       finalLocation = existing.location;
       finalIsRegion = existing.isRegion;
       if (!finalTz) finalTz = existing.timezone;
+    } else if (finalLocation === undefined && existing.location === null) {
+      // Passive metadata update should not erase a confirmed active-lookup null
+      finalLocation = null;
     }
     finalVerified = verified || existing.verified;
+    finalIsRegion = isRegion || existing.isRegion;
+    finalFollowing = following || existing.following;
+  }
+
+  // If location is still undefined (passive metadata only, not yet queried), store in-memory only
+  if (finalLocation === undefined) {
+    dataMap.set(userKey, {
+      location: undefined,
+      verified: finalVerified,
+      timezone: finalTz || null,
+      isRegion: finalIsRegion,
+      following: finalFollowing,
+      expiry: Date.now() + EXPIRY_EMPTY_DAYS * 86_400_000
+    });
+    return;
   }
 
   const days = finalLocation === null ? EXPIRY_EMPTY_DAYS : EXPIRY_DAYS;
   const tz   = (finalLocation ? resolveTimezone(finalLocation) : null) || finalTz || null;
-  const entry = { location: finalLocation, verified: finalVerified, timezone: tz, isRegion: finalIsRegion, expiry: Date.now() + days * 86_400_000 };
+  const entry = { location: finalLocation, verified: finalVerified, timezone: tz, isRegion: finalIsRegion, following: finalFollowing, expiry: Date.now() + days * 86_400_000 };
   
   dataMap.set(userKey, entry);
   dbSet(userKey, entry);
-  
-  evict();
 }
 
 function evict() {
@@ -256,23 +276,27 @@ function evict() {
     }
   }
 }
+setInterval(evict, 300_000);
 
 // Cloud submission batching
 function enqueueSubmission(username, location, verified = false) {
-  if (!location || submittedSession.has(username) || submittedHistory.has(username)) return;
-  const cached = dataMap.get(username);
-  if (cached && cached.location === location && cached.verified === verified) {
-    submittedSession.add(username);
-    return;
-  }
-  submittedSession.add(username);
-  submittedHistory.add(username);
+  if (!location || !username) return;
+  const user = username.toLowerCase().replace(/^@/, '');
+
+  // 1. Strict validation: Only submit to Cloudflare if location maps to a valid country flag
+  if (!getCountryFlag(location)) return;
+
+  // 2. Prevent duplicate submissions in same session or history
+  if (submittedSession.has(user) || submittedHistory.has(user)) return;
+
+  submittedSession.add(user);
+  submittedHistory.add(user);
   if (submittedHistory.size > 2000) {
     const it = submittedHistory.values();
     for (let i = 0; i < 500; i++) submittedHistory.delete(it.next().value);
   }
   disk.write({ submission_history: Array.from(submittedHistory) });
-  submitBuffer.push({ username, location, verified });
+  submitBuffer.push({ username: user, location, verified });
   if (submitBuffer.length >= CLOUD_BATCH_MAX) drainSubmissions();
   else if (!submitTimer) submitTimer = setTimeout(drainSubmissions, SUBMIT_FLUSH_MS);
 }
@@ -296,22 +320,22 @@ function drainSubmissions() {
 async function fetchLocation(screenName, cacheOnly = false) {
   const userKey = screenName.toLowerCase();
   
-  // Hot cache hit
+  // Hot cache hit (skip if location === undefined, which means passive metadata only)
   const hot = dataMap.get(userKey);
-  if (hot && Date.now() < hot.expiry) {
+  if (hot && Date.now() < hot.expiry && hot.location !== undefined) {
     if (hot.location && !getCountryFlag(hot.location)) {
-      // Bypass invalid manual location in hot cache
+      // Bypass legacy invalid manual location in hot cache
     } else {
-      return { location: hot.location, verified: hot.verified ?? false, timezone: hot.timezone ?? null, isRegion: hot.isRegion ?? false, source: 'cache' };
+      return { location: hot.location, verified: hot.verified ?? false, timezone: hot.timezone ?? null, isRegion: hot.isRegion ?? false, following: hot.following ?? false, source: 'cache' };
     }
   }
-  if (hot) dataMap.delete(userKey);
+  if (hot && Date.now() >= hot.expiry) dataMap.delete(userKey);
 
   if (cacheOnly || devDataSource === 'cache_only') {
     const dbVal = await dbGet(userKey);
-    if (dbVal && Date.now() < dbVal.expiry) {
+    if (dbVal && Date.now() < dbVal.expiry && dbVal.location !== undefined) {
       if (dbVal.location && !getCountryFlag(dbVal.location)) {
-        // Bypass invalid manual location in cold cache
+        // Bypass legacy invalid manual location in cold cache
       } else {
         if (!dbVal.timezone && dbVal.location) {
           dbVal.timezone = resolveTimezone(dbVal.location);
@@ -320,7 +344,7 @@ async function fetchLocation(screenName, cacheOnly = false) {
         if (dataMap.size > MEMORY_CACHE_LIMIT) {
           dataMap.delete(dataMap.keys().next().value);
         }
-        return { location: dbVal.location, verified: dbVal.verified ?? false, timezone: dbVal.timezone ?? null, isRegion: dbVal.isRegion ?? false, source: 'cache' };
+        return { location: dbVal.location, verified: dbVal.verified ?? false, timezone: dbVal.timezone ?? null, isRegion: dbVal.isRegion ?? false, following: dbVal.following ?? false, source: 'cache' };
       }
     }
     return { location: null, verified: false, timezone: null };
@@ -328,9 +352,9 @@ async function fetchLocation(screenName, cacheOnly = false) {
 
   // Cold IndexedDB cache hit
   const dbVal = await dbGet(userKey);
-  if (dbVal && Date.now() < dbVal.expiry) {
+  if (dbVal && Date.now() < dbVal.expiry && dbVal.location !== undefined) {
     if (dbVal.location && !getCountryFlag(dbVal.location)) {
-      // Bypass invalid manual location in cold cache
+      // Bypass legacy invalid manual location in cold cache
     } else {
       if (!dbVal.timezone && dbVal.location) {
         dbVal.timezone = resolveTimezone(dbVal.location);
@@ -339,7 +363,7 @@ async function fetchLocation(screenName, cacheOnly = false) {
       if (dataMap.size > MEMORY_CACHE_LIMIT) {
         dataMap.delete(dataMap.keys().next().value);
       }
-      return { location: dbVal.location, verified: dbVal.verified ?? false, timezone: dbVal.timezone ?? null, isRegion: dbVal.isRegion ?? false, source: 'cache' };
+      return { location: dbVal.location, verified: dbVal.verified ?? false, timezone: dbVal.timezone ?? null, isRegion: dbVal.isRegion ?? false, following: dbVal.following ?? false, source: 'cache' };
     }
   }
 
@@ -355,7 +379,9 @@ async function fetchLocation(screenName, cacheOnly = false) {
       twitterPending.push({ screenName: userKey, resolve, reject });
       drainTwitter();
     }).then(result => {
-      if (!result?.location) negativeMap.set(userKey, Date.now() + MISS_TTL);
+      if (!result?.location || !getCountryFlag(result.location)) {
+        negativeMap.set(userKey, Date.now() + (result?.isRateLimited ? 120_000 : MISS_TTL));
+      }
       flightMap.delete(userKey);
       return result;
     });
@@ -365,11 +391,16 @@ async function fetchLocation(screenName, cacheOnly = false) {
 
   const ticket = new Promise((resolve, reject) => {
     cloudPending.push({ screenName: userKey, resolve, reject });
-    if (!cloudBusy && !cloudBatchTimer) {
-      cloudBatchTimer = setTimeout(() => { cloudBatchTimer = null; drainCloud(); }, 50);
+    if (cloudPending.length >= CLOUD_BATCH_MAX && !cloudBusy) {
+      if (cloudBatchTimer) { clearTimeout(cloudBatchTimer); cloudBatchTimer = null; }
+      drainCloud();
+    } else if (!cloudBusy && !cloudBatchTimer) {
+      cloudBatchTimer = setTimeout(() => { cloudBatchTimer = null; drainCloud(); }, 500);
     }
   }).then(result => {
-    if (!result?.location) negativeMap.set(userKey, Date.now() + MISS_TTL);
+    if (!result?.location || !getCountryFlag(result.location)) {
+      negativeMap.set(userKey, Date.now() + (result?.isRateLimited ? 120_000 : MISS_TTL));
+    }
     flightMap.delete(userKey);
     return result;
   });
@@ -389,8 +420,27 @@ async function drainCloud() {
   }
 
   cloudBusy = true;
-  const batch = cloudPending.splice(0, CLOUD_BATCH_MAX);
-  const names = batch.map(r => r.screenName);
+  
+  const batch = [];
+  while (cloudPending.length > 0 && batch.length < CLOUD_BATCH_MAX) {
+    const req = cloudPending.shift();
+    const fresh = dataMap.get(req.screenName);
+    if (fresh && fresh.expiry > Date.now() && fresh.location !== undefined) {
+      if (!(fresh.location && !getCountryFlag(fresh.location))) {
+        req.resolve({ location: fresh.location, verified: fresh.verified, timezone: fresh.timezone, isRegion: fresh.isRegion, following: fresh.following, source: 'cache' });
+        continue;
+      }
+    }
+    batch.push(req);
+  }
+
+  if (batch.length === 0) {
+    cloudBusy = false;
+    if (cloudPending.length > 0) setTimeout(drainCloud, 10);
+    return;
+  }
+
+  const names = batch.map(r => r.screenName).sort();
   let results = {};
   let cloudOk = false;
 
@@ -439,20 +489,23 @@ async function drainCloud() {
       } else {
         // Cloud D1 doesn't reliably store verified — preserve any true from passive snooping
         const cloudVer = typeof payload === 'object' ? payload.verified : false;
-        const cachedVer = dataMap.get(req.screenName)?.verified ?? false;
+        const cachedEntry = dataMap.get(req.screenName);
+        const cachedVer = cachedEntry?.verified ?? false;
         const ver  = cloudVer || cachedVer;
         const aTz  = typeof payload === 'object' ? payload.timezone : null;
+        const isReg = (typeof payload === 'object' ? payload.is_region : false) || (cachedEntry?.isRegion ?? false);
+        const isFollowing = cachedEntry?.following ?? false;
         if (onlyVerified && typeof payload !== 'object') {
           if (devDataSource === 'cloudflare_only') {
-            const storedTz = dataMap.get(req.screenName)?.timezone ?? null;
-            req.resolve({ location: loc, verified: false, timezone: storedTz, isRegion: false, source: 'cloudflare' });
+            const storedTz = cachedEntry?.timezone ?? null;
+            req.resolve({ location: loc, verified: false, timezone: storedTz, isRegion: isReg, following: isFollowing, source: 'cloudflare' });
           } else {
             retry.push(req);
           }
         } else {
-          record(req.screenName, loc, ver, aTz);
+          record(req.screenName, loc, ver, aTz, isReg, isFollowing);
           const storedTz = dataMap.get(req.screenName)?.timezone ?? null;
-          req.resolve({ location: loc, verified: ver, timezone: storedTz, isRegion: false, source: 'cloudflare' });
+          req.resolve({ location: loc, verified: ver, timezone: storedTz, isRegion: isReg, following: isFollowing, source: 'cloudflare' });
         }
       }
     } else {
@@ -486,7 +539,7 @@ async function drainTwitter() {
   const fetchOne = (req) => new Promise(done => {
     // Re-check cache (passive data may have arrived while queued)
     const fresh = dataMap.get(req.screenName);
-    if (fresh && fresh.expiry > Date.now()) {
+    if (fresh && fresh.expiry > Date.now() && fresh.location !== undefined) {
       if (fresh.location && !getCountryFlag(fresh.location)) {
         // Bypass invalid manual location in re-check
       } else {
@@ -502,12 +555,13 @@ async function drainTwitter() {
       window.removeEventListener('message', onReply);
       if (settled) return;
       settled = true;
-      if (!e.data.isRateLimited) record(req.screenName, e.data.location, e.data.verified, null, e.data.is_region);
+      const validLoc = (e.data.location && getCountryFlag(e.data.location)) ? e.data.location : null;
+      if (!e.data.isRateLimited) record(req.screenName, validLoc, e.data.verified, null, e.data.is_region, e.data.following);
       const tz = dataMap.get(req.screenName)?.timezone ?? null;
-      const result = { location: e.data.location, verified: e.data.verified ?? false, timezone: tz, isRegion: e.data.is_region, source: 'twitter' };
+      const result = { location: validLoc, verified: e.data.verified ?? false, timezone: tz, isRegion: e.data.is_region, following: e.data.following, isRateLimited: !!e.data.isRateLimited, source: 'twitter' };
       req.resolve(result);
       flightMap.delete(req.screenName);
-      if (result.location) enqueueSubmission(req.screenName, result.location, result.verified);
+      if (validLoc) enqueueSubmission(req.screenName, validLoc, result.verified);
       done();
     };
     window.addEventListener('message', onReply);
@@ -516,7 +570,7 @@ async function drainTwitter() {
       if (settled) return;
       settled = true;
       setTimeout(() => { window.removeEventListener('message', onReply); flightMap.delete(req.screenName); }, 5000);
-      req.resolve({ location: null, verified: false });
+      req.resolve({ location: null, verified: false, isRateLimited: true });
       done();
     }, 4000);
   });
@@ -546,6 +600,66 @@ function findHandle(container) {
   const match = text.match(/@([a-zA-Z0-9_]{1,15})/);
   if (match) return match[1];
   return null;
+}
+
+let cachedCurrentUser = null;
+
+function checkIsOwnPost(container, screenName) {
+  const handle = screenName.toLowerCase();
+
+  // 1. Resolve current logged-in user from sidebar/navigation if not yet cached
+  if (!cachedCurrentUser) {
+    // Check AppTabBar profile link
+    const profileLink = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+    if (profileLink && profileLink.href) {
+      try {
+        const u = new URL(profileLink.href).pathname.replace(/^\/+/, '').split('/')[0].toLowerCase();
+        if (u && !['home','explore','notifications','messages','search','i','settings'].includes(u)) {
+          cachedCurrentUser = u;
+        }
+      } catch(_) {}
+    }
+
+    // Check Account Switcher button in side navigation
+    if (!cachedCurrentUser) {
+      const accountBtn = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
+      if (accountBtn) {
+        const match = accountBtn.textContent.match(/@([a-zA-Z0-9_]{1,15})/);
+        if (match) {
+          cachedCurrentUser = match[1].toLowerCase();
+        }
+      }
+    }
+
+    // Check nav profile links with aria-label containing "Profile"
+    if (!cachedCurrentUser) {
+      const navProfile = document.querySelector('nav a[href^="/"][aria-label*="Profile" i]');
+      if (navProfile && navProfile.href) {
+        try {
+          const u = new URL(navProfile.href).pathname.replace(/^\/+/, '').split('/')[0].toLowerCase();
+          if (u && !['home','explore','notifications','messages','search','i','settings'].includes(u)) {
+            cachedCurrentUser = u;
+          }
+        } catch(_) {}
+      }
+    }
+  }
+
+  // 2. Check against cached current user
+  if (cachedCurrentUser && cachedCurrentUser === handle) {
+    return true;
+  }
+
+  // 3. Edit Profile button: Present if currently on the logged-in user's own profile page
+  if (document.querySelector('[data-testid="editProfileButton"]')) {
+    const pathFirst = window.location.pathname.toLowerCase().replace(/^\/+/, '').split('/')[0];
+    if (pathFirst === handle) {
+      cachedCurrentUser = handle;
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function processNode(container, screenName) {
@@ -580,25 +694,80 @@ async function processNode(container, screenName) {
     const ver  = data?.verified ?? false;
     const tz   = data?.timezone ?? null;
     const reg  = data?.isRegion ?? false;
+    const following = data?.following ?? false;
 
     // Blocked-region filter
+    const doVpnBlock = blockVpnMode && reg;
+    
+    let doCountryBlock = false;
     if (filteredRegions.length && loc) {
       const lc = loc.toLowerCase();
       const blocked  = filteredRegions.some(r => lc.includes(r));
-      const doFilter = blocked && (!onlyVerified || ver);
-      if (doFilter) {
-        const article = container.closest('article[data-testid="tweet"]');
-        if (article) {
-          article.style.display = 'none';
-          article.dataset.locationHidden = 'true';
-          container.dataset.tfDone = '1';
+      doCountryBlock = blocked && (!onlyVerified || ver);
+    }
+    
+    const doFilter = doCountryBlock || doVpnBlock;
+      
+    const isOwnPost = checkIsOwnPost(container, screenName);
+    if (isOwnPost) {
+      const article = container.closest('article[data-testid="tweet"]');
+      if (article && article.dataset.locationHidden === 'true') {
+        article.style.display = '';
+        delete article.dataset.locationHidden;
+      }
+    }
+
+    let isFollowing = following;
+    const pathFirst = window.location.pathname.toLowerCase().replace(/^\/+/, '').split('/')[0];
+    const isProfileOfUser = pathFirst === screenName.toLowerCase() && !['home','explore','notifications','messages','search','i','settings'].includes(pathFirst);
+
+    if (!isFollowing && isProfileOfUser) {
+      const primaryCol = document.querySelector('[data-testid="primaryColumn"]');
+      const profileUnfollow = primaryCol ? primaryCol.querySelector('[data-testid="placementTracking"] [data-testid$="-unfollow"], [data-testid="userActions"] ~ div [data-testid$="-unfollow"]') : null;
+      if (profileUnfollow) {
+        isFollowing = true;
+        record(screenName, loc || undefined, ver, tz, reg, true);
+      }
+    }
+
+    if (!isFollowing && pathFirst === 'home') {
+      const activeTab = document.querySelector('[role="tab"][aria-selected="true"]');
+      if (activeTab && activeTab.textContent?.trim().toLowerCase() === 'following') {
+        isFollowing = true;
+        record(screenName, loc || undefined, ver, tz, reg, true);
+      }
+    }
+
+    if (!isFollowing && container.matches?.('[data-testid="UserCell"]')) {
+      const cellUnfollow = container.querySelector('[data-testid$="-unfollow"]');
+      if (cellUnfollow) {
+        isFollowing = true;
+        record(screenName, loc || undefined, ver, tz, reg, true);
+      }
+    }
+
+    const shouldBypass = isOwnPost || (bypassFollowedMode && isFollowing);
+
+    if (doFilter && !shouldBypass) {
+      const article = container.closest('article[data-testid="tweet"]');
+      if (article) {
+        article.style.display = 'none';
+        article.dataset.locationHidden = 'true';
+        container.dataset.tfDone = '1';
+        const lowerHandle = screenName.toLowerCase();
+        if (article.dataset.tfCountedHidden !== lowerHandle) {
+          article.dataset.tfCountedHidden = lowerHandle;
           bumpStat('hidden');
-          if (autoFilter) {
-            window.postMessage({ type: '__blockUser', screenName, target: 'pageScript' }, window.location.origin);
-            bumpStat('blocked');
-          }
-          return;
         }
+        if (!blockedUsersSession.has(lowerHandle)) {
+          blockedUsersSession.add(lowerHandle);
+          bumpStat('blocked');
+        }
+        if (autoFilter && !autoBlockedUsersSession.has(lowerHandle)) {
+          autoBlockedUsersSession.add(lowerHandle);
+          window.postMessage({ type: '__blockUser', screenName, target: 'pageScript' }, window.location.origin);
+        }
+        return;
       }
     }
 
@@ -630,7 +799,8 @@ async function processNode(container, screenName) {
         clock.className = 'tf-time';
         clock.dataset.tz = tz;
         const h = getLocalHour(tz);
-        clock.textContent = (h !== null && (h >= 22 || h < 6) ? '🌙 ' : '') + ts;
+        const isNight = h !== null && (h >= 22 || h < 6);
+        clock.innerHTML = (isNight ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="#fbbf24" stroke="#f59e0b" stroke-width="1.5" style="vertical-align:-1px;margin-right:3px;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>' : '') + ts;
         badge.appendChild(clock);
         badge.setAttribute('data-tf-tip', `${loc} (${tz} • ${ts})`);
       }
@@ -638,8 +808,7 @@ async function processNode(container, screenName) {
 
     if (reg) {
       const warn = document.createElement('span');
-      warn.textContent = ' ⚠️';
-      warn.style.fontSize = '0.8em';
+      warn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" style="vertical-align:-1.5px;margin-left:3px;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="#f59e0b" fill-opacity="0.22" stroke="#f59e0b" stroke-width="2" stroke-linejoin="round"/><line x1="12" y1="9" x2="12" y2="13" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="#f59e0b"/></svg>';
       warn.style.cursor = 'help';
       badge.appendChild(warn);
       const currentTip = badge.getAttribute('data-tf-tip');
@@ -656,25 +825,31 @@ async function processNode(container, screenName) {
       badge.appendChild(srcTag);
     }
 
-    // Find insertion point — next to the @handle (as a sibling to the handle container to prevent truncation)
+    // Find insertion point — next to the @handle
     let anchor = null;
+    let handleContainer = null;
     const handle = `@${screenName.toLowerCase()}`;
     for (const leaf of nameWrap.querySelectorAll('*')) {
       if (leaf.children.length === 0 && leaf.textContent.toLowerCase().includes(handle)) {
+        anchor = leaf;
         let curr = leaf;
         while (curr && curr.parentElement && curr.parentElement !== nameWrap) {
           curr = curr.parentElement;
         }
         if (curr && curr.parentElement === nameWrap) {
-          anchor = curr;
+          handleContainer = curr;
         } else {
-          anchor = leaf.parentElement || nameWrap;
+          handleContainer = leaf.parentElement || nameWrap;
         }
         break;
       }
     }
-    if (anchor && anchor !== nameWrap && anchor.parentElement === nameWrap) {
+
+    const isVertical = nameWrap && window.getComputedStyle(nameWrap).flexDirection === 'column';
+    if (isVertical && anchor) {
       anchor.insertAdjacentElement('afterend', badge);
+    } else if (handleContainer && handleContainer !== nameWrap) {
+      handleContainer.insertAdjacentElement('afterend', badge);
     } else {
       (anchor || nameWrap).appendChild(badge);
     }
@@ -829,65 +1004,18 @@ function pumpToast() {
   if (old) old.remove();
   const pct = Math.round((discoveredCount / total) * 100);
   const flagUrl = typeof getTwemojiUrl === 'function' ? getTwemojiUrl(flag) : null;
-  
   const el = document.createElement('div');
   el.className = 'tf-discovery-toast';
-  
-  const header = document.createElement('div');
-  header.className = 'tf-toast-header';
-  
-  const sparkle = document.createElement('span');
-  sparkle.className = 'tf-toast-sparkle';
-  sparkle.textContent = '✨';
-  header.appendChild(sparkle);
-  
-  const headerText = document.createElement('span');
-  headerText.textContent = ' New Country Discovered!';
-  header.appendChild(headerText);
-  el.appendChild(header);
-  
-  const country = document.createElement('div');
-  country.className = 'tf-toast-country';
-  
-  const flagDiv = document.createElement('div');
-  flagDiv.className = 'tf-toast-flag';
-  if (flagUrl) {
-    const img = document.createElement('img');
-    img.src = flagUrl;
-    img.alt = flag;
-    img.style.width = '1em';
-    img.style.height = '1em';
-    img.style.display = 'block';
-    flagDiv.appendChild(img);
-  } else {
-    flagDiv.textContent = flag;
-  }
-  country.appendChild(flagDiv);
-  
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'tf-toast-name';
-  nameSpan.textContent = countryName;
-  country.appendChild(nameSpan);
-  el.appendChild(country);
-  
-  const progress = document.createElement('div');
-  progress.className = 'tf-toast-progress';
-  
-  const bar = document.createElement('div');
-  bar.className = 'tf-toast-progress-bar';
-  
-  const fill = document.createElement('div');
-  fill.className = 'tf-toast-progress-fill';
-  fill.style.width = `${pct}%`;
-  bar.appendChild(fill);
-  progress.appendChild(bar);
-  
-  const progressText = document.createElement('span');
-  progressText.className = 'tf-toast-progress-text';
-  progressText.textContent = `${discoveredCount}/${total}`;
-  progress.appendChild(progressText);
-  el.appendChild(progress);
-  
+  el.innerHTML = `
+    <div class="tf-toast-header"><span class="tf-toast-sparkle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffd400" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" fill="rgba(255,212,0,0.2)"/></svg></span><span>New Country Discovered!</span></div>
+    <div class="tf-toast-country">
+      <div class="tf-toast-flag">${flagUrl ? `<img src="${flagUrl}" alt="${flag}" style="width:1em;height:1em;display:block;">` : flag}</div>
+      <span class="tf-toast-name">${countryName}</span>
+    </div>
+    <div class="tf-toast-progress">
+      <div class="tf-toast-progress-bar"><div class="tf-toast-progress-fill" style="width:${pct}%"></div></div>
+      <span class="tf-toast-progress-text">${discoveredCount}/${total}</span>
+    </div>`;
   document.body.appendChild(el);
   setTimeout(() => {
     el.classList.add('tf-toast-exit');
@@ -907,72 +1035,56 @@ function pumpMilestoneToast() {
   ensureToastCSS();
   const old = document.querySelector('.tf-milestone-toast');
   if (old) old.remove();
-
-  const el = document.createElement('div');
-  el.className = 'tf-milestone-toast';
-
-  // Programmatic confetti burst
+  let confettiHTML = '';
   if (count >= 500) {
     const colors = ['#1d9bf0', '#00ba7c', '#f91880', '#ffd400', '#ff7a00'];
-    for (let i = 0; i < 40; i++) {
+    for(let i=0; i<40; i++) {
       const color = colors[Math.floor(Math.random() * colors.length)];
       const tx = (Math.random() - 0.5) * 400 + 'px';
       const ty = (Math.random() - 0.5) * 300 + 'px';
       const rot = Math.random() * 720 + 'deg';
       const delay = Math.random() * 0.2 + 's';
-      
-      const confettiPiece = document.createElement('div');
-      confettiPiece.className = 'tf-confetti-piece';
-      confettiPiece.style.background = color;
-      confettiPiece.style.setProperty('--tx', tx);
-      confettiPiece.style.setProperty('--ty', ty);
-      confettiPiece.style.setProperty('--rot', rot);
-      confettiPiece.style.animationDelay = delay;
-      
-      el.appendChild(confettiPiece);
+      confettiHTML += `<div class="tf-confetti-piece" style="background:${color}; --tx:${tx}; --ty:${ty}; --rot:${rot}; animation-delay:${delay};"></div>`;
     }
   }
 
-  const brand = document.createElement('div');
-  brand.className = 'tf-source-brand';
-  brand.style.position = 'relative';
-  brand.style.zIndex = '1';
-  brand.textContent = 'Location Flag & Blocker';
-  el.appendChild(brand);
+  const isKofiBtn = String(url).includes('ko-fi.com');
+  const btnIconSvg = isKofiBtn
+    ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z" fill="rgba(255,255,255,0.2)"/></svg>`
+    : `<svg width="14" height="14" viewBox="0 0 24 24" fill="rgba(255,212,0,0.3)" stroke="#ffd400" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
 
-  const header = document.createElement('div');
-  header.className = 'tf-toast-header';
-  header.style.justifyContent = 'center';
-  header.style.position = 'relative';
-  header.style.zIndex = '1';
-  
-  const sparkle = document.createElement('span');
-  sparkle.className = 'tf-toast-sparkle';
-  sparkle.textContent = '🏆';
-  header.appendChild(sparkle);
-
-  const headerText = document.createElement('span');
-  headerText.textContent = ' Milestone Reached!';
-  header.appendChild(headerText);
-  el.appendChild(header);
-
-  const msg = document.createElement('div');
-  msg.className = 'tf-milestone-message';
-  msg.style.position = 'relative';
-  msg.style.zIndex = '1';
-  msg.textContent = message;
-  el.appendChild(msg);
-
-  const btn = document.createElement('a');
-  btn.href = url;
-  btn.target = '_blank';
-  btn.className = 'tf-milestone-btn';
-  btn.style.position = 'relative';
-  btn.style.zIndex = '1';
-  btn.textContent = buttonText;
-  el.appendChild(btn);
-
+  const el = document.createElement('div');
+  el.className = 'tf-milestone-toast';
+  el.innerHTML = `
+    ${confettiHTML}
+    <div class="tf-source-brand" style="position:relative; z-index:1;">Location Flag & Blocker</div>
+    <div class="tf-toast-header" style="justify-content: center; position:relative; z-index:1;"><span class="tf-toast-sparkle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffd400" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" fill="rgba(255,212,0,0.2)"/></svg></span><span>Milestone Reached!</span></div>
+    <div class="tf-milestone-message" style="position:relative; z-index:1;">${message}</div>
+    <a href="${url}" target="_blank" class="tf-milestone-btn" style="position:relative; z-index:1;">${btnIconSvg}${buttonText}</a>`;
   document.body.appendChild(el);
+
+  try {
+    const isKofi = String(url).includes('ko-fi.com');
+    chrome.runtime.sendMessage({
+      type: 'sendTelemetry',
+      url: '/timeline-toast',
+      eventName: 'milestone_toast_shown',
+      data: { count, target: isKofi ? 'kofi' : 'review' }
+    }).catch(() => {});
+
+    const btn = el.querySelector('.tf-milestone-btn');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        chrome.runtime.sendMessage({
+          type: 'sendTelemetry',
+          url: '/timeline-toast',
+          eventName: isKofi ? 'kofi_clicked' : 'review_clicked',
+          data: { source: `milestone_toast_${count}`, count }
+        }).catch(() => {});
+      });
+    }
+  } catch (_) {}
+
   setTimeout(() => {
     el.classList.add('tf-toast-exit');
     setTimeout(() => { el.remove(); milestoneToastBusy = false; setTimeout(pumpMilestoneToast, 1000); }, 400);
@@ -1048,6 +1160,8 @@ async function boot() {
     discoveryOn  = cfg.passport_mode ?? true;
     devDataSource = cfg.dev_data_source || 'auto';
     alwaysLoadComments = cfg.always_load_comments ?? false;
+    blockVpnMode = cfg.block_vpn_mode ?? false;
+    bypassFollowedMode = cfg.bypass_followed_mode ?? true;
     if (cfg.blocked_countries) parseRegions(cfg.blocked_countries);
     const local = await disk.read(['submission_history', 'dev_show_source_banner', '_tf_query_id']);
     submittedHistory = new Set(local.submission_history || []);
@@ -1091,12 +1205,16 @@ async function boot() {
   setInterval(() => {
     // Skip clock updates when tab is not visible to save CPU
     if (document.hidden) return;
-    for (const el of document.querySelectorAll('.tf-time[data-tz]')) {
+    for (const el of document.getElementsByClassName('tf-time')) {
       const tz = el.dataset.tz;
+      if (!tz) continue;
       const ts = getLocalTimeString(tz);
       if (ts) {
         const h = getLocalHour(tz);
-        el.textContent = (h !== null && (h >= 22 || h < 6) ? '🌙 ' : '') + ts;
+        const nightIcon = (h !== null && (h >= 22 || h < 6))
+          ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="rgba(120,86,255,0.25)" stroke="#9d85ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:2px;"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>`
+          : '';
+        el.innerHTML = nightIcon + ts;
       }
     }
     // Sweep expired negative-cache entries and enforce cap
@@ -1143,6 +1261,20 @@ async function boot() {
         const hasTestId = node.hasAttribute('data-testid') || (node.querySelector && node.querySelector('[data-testid]'));
         if (!hasTestId) continue;
 
+        // Check if an unfollow button was just mounted in the main profile header
+        const isUnfollowNode = (node.hasAttribute('data-testid') && node.getAttribute('data-testid').endsWith('-unfollow')) ||
+                               (node.querySelector && node.querySelector('[data-testid="placementTracking"] [data-testid$="-unfollow"]'));
+        if (isUnfollowNode && !node.closest?.('[data-testid="UserCell"]') && node.closest?.('[data-testid="primaryColumn"]')) {
+          const currentPath = window.location.pathname.toLowerCase().replace(/^\/+/, '').split('/')[0];
+          if (currentPath && !['home','explore','notifications','messages','search','i','settings'].includes(currentPath)) {
+            const cached = dataMap.get(currentPath);
+            if (!cached || !cached.following) {
+              record(currentPath, cached?.location || undefined, cached?.verified || false, cached?.timezone || null, cached?.isRegion || false, true);
+              reevaluateProcessedNodes();
+            }
+          }
+        }
+
         if (node.matches?.(ELEMENT_SELECTORS) && !node.dataset.tfWatch) pending.add(node);
         if (!IGNORED_TAGS.has(node.tagName) && node.querySelectorAll) {
           for (const c of node.querySelectorAll(ELEMENT_SELECTORS)) {
@@ -1160,9 +1292,22 @@ async function boot() {
     if (e.source !== window) return;
     if (e.data?.type === '__passiveData' && Array.isArray(e.data.users)) {
       for (const u of e.data.users) {
-        if (u?.screen_name && (u.location || u.verified || u.is_region)) {
-          record(u.screen_name, u.location || null, u.verified, null, u.is_region);
-          if (u.location) enqueueSubmission(u.screen_name, u.location, u.verified);
+        if (u?.screen_name && (u.location || u.verified || u.is_region || u.following !== undefined)) {
+          const validPassiveLoc = (u.location && getCountryFlag(u.location)) ? u.location : undefined;
+          record(u.screen_name, validPassiveLoc, u.verified, null, u.is_region, u.following);
+          if (u.following) {
+            document.querySelectorAll(`[data-tf-handle="${u.screen_name.toLowerCase()}"]`).forEach(el => {
+              const article = el.closest('article[data-testid="tweet"]');
+              if (article && article.dataset.locationHidden === 'true') {
+                article.style.display = '';
+                delete article.dataset.locationHidden;
+                delete el.dataset.tfDone;
+                processNode(el, u.screen_name);
+              }
+            });
+          }
+          // Only submit to Cloudflare if it was an official verified "Account based in" location
+          if (validPassiveLoc && u.is_account_based_in) enqueueSubmission(u.screen_name, validPassiveLoc, u.verified);
         }
       }
       return;
@@ -1173,6 +1318,30 @@ async function boot() {
       disk.write({ _tf_query_id: e.data.queryId });
     }
   });
+
+  // SPA navigation watcher to re-evaluate on profile/page switches
+  let lastObservedUrl = window.location.pathname;
+  setInterval(() => {
+    if (window.location.pathname !== lastObservedUrl) {
+      lastObservedUrl = window.location.pathname;
+      setTimeout(reevaluateProcessedNodes, 200);
+    }
+  }, 500);
+
+  function reevaluateProcessedNodes() {
+    if (!enabled) return;
+    document.querySelectorAll('[data-tf-handle]').forEach(el => {
+      const handle = el.dataset.tfHandle;
+      if (!handle) return;
+      const article = el.closest('article[data-testid="tweet"]');
+      if (article && article.dataset.locationHidden === 'true') {
+        article.style.display = '';
+        delete article.dataset.locationHidden;
+      }
+      delete el.dataset.tfDone;
+      processNode(el, handle);
+    });
+  }
 
   // 10. Chrome runtime messages
   chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
@@ -1198,9 +1367,18 @@ async function boot() {
       discoveryOn  = s.passport_mode ?? discoveryOn;
       devDataSource = s.dev_data_source || devDataSource;
       alwaysLoadComments = s.always_load_comments ?? alwaysLoadComments;
+      blockVpnMode = s.block_vpn_mode ?? blockVpnMode;
+      bypassFollowedMode = s.bypass_followed_mode ?? bypassFollowedMode;
       if (s.blocked_countries) parseRegions(s.blocked_countries);
+      reevaluateProcessedNodes();
     } else if (msg.type === 'alwaysLoadCommentsUpdate') {
       alwaysLoadComments = msg.enabled;
+    } else if (msg.type === 'blockVpnUpdate') {
+      blockVpnMode = msg.enabled;
+      reevaluateProcessedNodes();
+    } else if (msg.type === 'bypassFollowedUpdate') {
+      bypassFollowedMode = msg.enabled;
+      reevaluateProcessedNodes();
     } else if (msg.type === 'devDataSourceUpdate') {
       devDataSource = msg.source;
     } else if (msg.type === 'devBannerUpdate') {
@@ -1212,10 +1390,13 @@ async function boot() {
       showMilestoneToast({ count: msg.count, message: msg.message, buttonText: msg.buttonText, url: msg.url });
     } else if (msg.type === 'blockedCountriesUpdate') {
       parseRegions(msg.countries);
+      reevaluateProcessedNodes();
     } else if (msg.type === 'verifiedOnlyUpdate') {
       onlyVerified = msg.enabled;
+      reevaluateProcessedNodes();
     } else if (msg.type === 'autoBlockUpdate') {
       autoFilter = msg.enabled;
+      reevaluateProcessedNodes();
     } else if (msg.type === 'getStatus') {
       const now = Math.floor(Date.now() / 1000);
       respond({ rateLimited: rateLimitUntil > now, resetTime: rateLimitUntil, queueLength: cloudPending.length + twitterPending.length });

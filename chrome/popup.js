@@ -12,6 +12,12 @@ const DEBUG_STORAGE_KEY = 'debug_mode_enabled';
 const STATS_KEY = 'extension_stats';
 const DEV_DATA_SOURCE_KEY = 'dev_data_source';
 const ALWAYS_LOAD_COMMENTS_KEY = 'always_load_comments';
+const BLOCK_VPN_KEY = 'block_vpn_mode';
+const BYPASS_FOLLOWED_KEY = 'bypass_followed_mode';
+const IS_PRO_KEY = 'is_pro_member';
+const PRO_DATA_KEY = 'pro_membership_data';
+const PRO_DEVICE_CODE_KEY = 'pro_device_code';
+const VERIFY_PRO_URL = `${API_URL}/verify-pro`;
 
 // DOM Elements - initialized after DOMContentLoaded
 let els = {};
@@ -21,6 +27,17 @@ let isDropdownLoaded = false;
 
 // --- Helpers ---
 
+function trackEvent(name, data) {
+  try {
+    chrome.runtime.sendMessage({
+      type: 'sendTelemetry',
+      url: '/popup',
+      eventName: name,
+      data
+    }).catch(() => {});
+  } catch (_) {}
+}
+
 function updateStatusUI(type, resetTime) {
   els.status.style.display = 'flex';
   els.status.className = 'api-status';
@@ -28,20 +45,26 @@ function updateStatusUI(type, resetTime) {
   
   const icon = document.createElement('span');
   icon.className = 'api-status-icon';
+  icon.style.display = 'inline-flex';
+  icon.style.alignItems = 'center';
   const text = document.createElement('span');
 
   if (type === 'good') {
     els.status.classList.add('green');
-    icon.textContent = '✅'; text.textContent = ' API Status: Good';
+    icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" fill="#00ba7c" fill-opacity="0.2" stroke="#00ba7c" stroke-width="2"/><path d="m9 12 2 2 4-4" stroke="#00ba7c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    text.textContent = ' API Status: Good';
   } else if (type === 'limited') {
     els.status.classList.add('red');
     const min = Math.max(0, Math.ceil((resetTime - (Date.now()/1000)) / 60));
-    icon.textContent = '⚠️'; text.textContent = ` Rate Limited (${min}m left)`;
+    icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="#f4212e" fill-opacity="0.2" stroke="#f4212e" stroke-width="2"/><line x1="12" y1="9" x2="12" y2="13" stroke="#f4212e" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="#f4212e"/></svg>';
+    text.textContent = ` Rate Limited (${min}m left)`;
   } else if (type === 'inactive') {
     els.status.style.color = '#536471';
-    icon.textContent = 'ℹ️'; text.textContent = ' Go to X.com to use';
+    icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#536471" stroke-width="2"/><line x1="12" y1="16" x2="12" y2="12" stroke="#536471" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="8" r="1" fill="#536471"/></svg>';
+    text.textContent = ' Go to X.com to use';
   } else {
-    icon.textContent = '⚪'; text.textContent = ' Status: Unknown';
+    icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="#8b98a5"/></svg>';
+    text.textContent = ' Status: Unknown';
   }
   els.status.append(icon, text);
 }
@@ -91,7 +114,7 @@ function showAutoBlockConfirmation() {
     // Warning icon
     const icon = document.createElement('div');
     icon.className = 'confirm-icon';
-    icon.textContent = '⚠️';
+    icon.innerHTML = '<svg width="44" height="44" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="#f4212e" fill-opacity="0.16" stroke="#f4212e" stroke-width="1.75" stroke-linejoin="round"/><line x1="12" y1="9" x2="12" y2="13" stroke="#f4212e" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="#f4212e"/></svg>';
     
     // Title
     const title = document.createElement('h2');
@@ -106,7 +129,7 @@ function showAutoBlockConfirmation() {
     // Warning box
     const warning = document.createElement('div');
     warning.className = 'confirm-warning';
-    warning.textContent = '⚡ This action cannot be undone automatically';
+    warning.textContent = 'This action cannot be undone automatically';
     
     // Buttons
     const btnContainer = document.createElement('div');
@@ -231,6 +254,7 @@ function toggleCountry(country, add) {
   });
   
   renderBlockedList();
+  trackEvent('toggle_country', { country, action: add ? 'block' : 'unblock' });
   
   if (isDropdownLoaded) {
     const opt = els.options.querySelector(`.custom-option[data-value="${country}"]`);
@@ -482,7 +506,9 @@ function init() {
     verifiedOnly: document.getElementById('verifiedOnlyToggle'),
     autoBlock: document.getElementById('autoBlockToggle'),
     passportMode: document.getElementById('passportModeToggle'),
-    alwaysLoadComments: document.getElementById('alwaysLoadCommentsToggle')
+    alwaysLoadComments: document.getElementById('alwaysLoadCommentsToggle'),
+    blockVpn: document.getElementById('blockVpnToggle'),
+    bypassFollowed: document.getElementById('bypassFollowedToggle')
   };
 
   // Verify critical elements exist
@@ -491,7 +517,7 @@ function init() {
     return;
   }
 
-  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, PASSPORT_MODE_KEY, ALWAYS_LOAD_COMMENTS_KEY, STATS_KEY, 'has_rated', 'dismissed_rating'], (res) => {
+  chrome.storage.local.get([TOGGLE_KEY, BLOCKED_COUNTRIES_KEY, DEBUG_STORAGE_KEY, VERIFIED_ONLY_KEY, AUTO_BLOCK_KEY, PASSPORT_MODE_KEY, ALWAYS_LOAD_COMMENTS_KEY, BLOCK_VPN_KEY, BYPASS_FOLLOWED_KEY, STATS_KEY, 'has_rated', 'dismissed_rating'], (res) => {
     // 1. Setup State
     const isEnabled = res[TOGGLE_KEY] !== undefined ? res[TOGGLE_KEY] : DEFAULT_ENABLED;
     updateToggle(isEnabled);
@@ -505,26 +531,39 @@ function init() {
     // Default to enabled if not set
     if (res[PASSPORT_MODE_KEY] !== false) els.passportMode.classList.add('enabled');
     if (res[ALWAYS_LOAD_COMMENTS_KEY]) els.alwaysLoadComments.classList.add('enabled');
+    if (res[BLOCK_VPN_KEY]) els.blockVpn.classList.add('enabled');
+    if (res[BYPASS_FOLLOWED_KEY] !== false) els.bypassFollowed?.classList.add('enabled');
     
     // Load stats with backward compatibility
+    const rawStats = res[STATS_KEY] || {};
     const stats = {
-      hiddenPosts: 0,
-      blockedAccounts: 0,
-      seenCountries: {},
-      totalScanned: 0,
-      ...(res[STATS_KEY] || {})
+      hiddenPosts: Number(rawStats.hiddenPosts) || 0,
+      blockedAccounts: Number(rawStats.blockedAccounts) || 0,
+      seenCountries: rawStats.seenCountries || {},
+      totalScanned: Number(rawStats.totalScanned) || 0
     };
     document.getElementById('hiddenPostsCount').textContent = stats.hiddenPosts.toLocaleString();
     document.getElementById('blockedAccountsCount').textContent = stats.blockedAccounts.toLocaleString();
     document.getElementById('totalScannedCount').textContent = stats.totalScanned.toLocaleString();
+
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes[STATS_KEY]?.newValue) {
+        const updated = changes[STATS_KEY].newValue;
+        document.getElementById('hiddenPostsCount').textContent = (Number(updated.hiddenPosts) || 0).toLocaleString();
+        document.getElementById('blockedAccountsCount').textContent = (Number(updated.blockedAccounts) || 0).toLocaleString();
+        document.getElementById('totalScannedCount').textContent = (Number(updated.totalScanned) || 0).toLocaleString();
+      }
+    });
     
     if (res[DEBUG_STORAGE_KEY]) renderDebugUI();
     initRatingUI(stats, res.has_rated, res.dismissed_rating);
+    trackEvent('popup_open');
     
     // 2. Setup Listeners
     els.toggle.addEventListener('click', () => {
       const newState = !els.toggle.classList.contains('enabled');
       updateToggle(newState);
+      trackEvent('toggle_setting', { setting: 'extension_enabled', value: newState });
       chrome.storage.local.set({ [TOGGLE_KEY]: newState }, () => {
         notifyContentScript({ type: 'extensionToggle', enabled: newState });
       });
@@ -533,6 +572,7 @@ function init() {
     els.verifiedOnly.addEventListener('click', () => {
       const newState = !els.verifiedOnly.classList.contains('enabled');
       els.verifiedOnly.classList.toggle('enabled', newState);
+      trackEvent('toggle_setting', { setting: 'verified_only_mode', value: newState });
       chrome.storage.local.set({ [VERIFIED_ONLY_KEY]: newState }, () => {
         notifyContentScript({ type: 'verifiedOnlyUpdate', enabled: newState });
       });
@@ -545,6 +585,7 @@ function init() {
         if (!confirmed) return;
       }
       els.autoBlock.classList.toggle('enabled', newState);
+      trackEvent('toggle_setting', { setting: 'auto_block_mode', value: newState });
       chrome.storage.local.set({ [AUTO_BLOCK_KEY]: newState }, () => {
         notifyContentScript({ type: 'autoBlockUpdate', enabled: newState });
       });
@@ -553,6 +594,7 @@ function init() {
     els.passportMode.addEventListener('click', () => {
       const newState = !els.passportMode.classList.contains('enabled');
       els.passportMode.classList.toggle('enabled', newState);
+      trackEvent('toggle_setting', { setting: 'passport_mode', value: newState });
       chrome.storage.local.set({ [PASSPORT_MODE_KEY]: newState }, () => {
         notifyContentScript({ type: 'passportModeUpdate', enabled: newState });
       });
@@ -561,8 +603,27 @@ function init() {
     els.alwaysLoadComments.addEventListener('click', () => {
       const newState = !els.alwaysLoadComments.classList.contains('enabled');
       els.alwaysLoadComments.classList.toggle('enabled', newState);
+      trackEvent('toggle_setting', { setting: 'always_load_comments', value: newState });
       chrome.storage.local.set({ [ALWAYS_LOAD_COMMENTS_KEY]: newState }, () => {
         notifyContentScript({ type: 'alwaysLoadCommentsUpdate', enabled: newState });
+      });
+    });
+
+    els.blockVpn.addEventListener('click', () => {
+      const newState = !els.blockVpn.classList.contains('enabled');
+      els.blockVpn.classList.toggle('enabled', newState);
+      trackEvent('toggle_setting', { setting: 'block_vpn_mode', value: newState });
+      chrome.storage.local.set({ [BLOCK_VPN_KEY]: newState }, () => {
+        notifyContentScript({ type: 'blockVpnUpdate', enabled: newState });
+      });
+    });
+
+    els.bypassFollowed?.addEventListener('click', () => {
+      const newState = !els.bypassFollowed.classList.contains('enabled');
+      els.bypassFollowed.classList.toggle('enabled', newState);
+      trackEvent('toggle_setting', { setting: 'bypass_followed_mode', value: newState });
+      chrome.storage.local.set({ [BYPASS_FOLLOWED_KEY]: newState }, () => {
+        notifyContentScript({ type: 'bypassFollowedUpdate', enabled: newState });
       });
     });
 
@@ -612,7 +673,7 @@ function init() {
       initUpdateCheck();
       initFeedbackUI();
       initWelcomeScreen();
-      initKofiModal();
+      initProModal();
     }, 50);
   });
 }
@@ -655,7 +716,8 @@ function showUpdateBanner(version) {
   const banner = document.createElement('div');
   banner.className = 'update-banner';
   const span = document.createElement('span');
-  span.textContent = `🚀 Update ${version} available`;
+  span.style.cssText = 'display:inline-flex;align-items:center;gap:6px;';
+  span.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0277bd" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="16 12 12 8 8 12"/><line x1="12" y1="16" x2="12" y2="8"/></svg> Update ${version} available`;
   const link = document.createElement('a');
   link.href = REPO_URL; link.target = '_blank'; link.textContent = 'Get it';
   link.style.cssText = 'color:#0277bd;font-weight:700;margin-left:8px;text-decoration:none;';
@@ -793,26 +855,154 @@ function initFeedbackUI() {
 }
 
 
-// --- Ko-fi Modal ---
-function initKofiModal() {
-  const kofiTrigger = document.getElementById('kofiTrigger');
-  const kofiModal = document.getElementById('kofiModal');
-  const closeKofiModal = document.getElementById('closeKofiModal');
+// --- Pro Membership System ---
+function initProModal() {
+  const proBadgeBtn = document.getElementById('proBadgeBtn');
+  const proBadgeText = document.getElementById('proBadgeText');
+  const proModal = document.getElementById('proModal');
+  const closeProModal = document.getElementById('closeProModal');
+  const proCodeDisplay = document.getElementById('proCodeDisplay');
+  const copyProCodeBtn = document.getElementById('copyProCodeBtn');
+  const copyProFeedback = document.getElementById('copyProFeedback');
+  const proKeyInput = document.getElementById('proKeyInput');
+  const activateProBtn = document.getElementById('activateProBtn');
+  const proActivationStatus = document.getElementById('proActivationStatus');
+  const proModalTitle = document.getElementById('proModalTitle');
+  const proModalSub = document.getElementById('proModalSub');
 
-  if (!kofiTrigger || !kofiModal || !closeKofiModal) return;
+  if (!proBadgeBtn || !proModal) return;
 
-  kofiTrigger.addEventListener('click', () => {
-    kofiModal.hidden = false;
+  function setProActiveUI(proData) {
+    if (proBadgeBtn) {
+      proBadgeBtn.classList.add('active');
+      if (proBadgeText) proBadgeText.textContent = 'PRO';
+      proBadgeBtn.title = 'Supporter Pro Active!';
+    }
+    if (proModalTitle) proModalTitle.textContent = 'Pro Supporter Active';
+    if (proModalSub) {
+      const tier = proData?.tier || 'Supporter';
+      proModalSub.textContent = `Thank you for supporting this project! (${tier})`;
+    }
+  }
+
+  // 1. Get or Generate Unique Device Activation Code
+  chrome.storage.local.get([IS_PRO_KEY, PRO_DATA_KEY, PRO_DEVICE_CODE_KEY], (res) => {
+    let deviceCode = res[PRO_DEVICE_CODE_KEY];
+    if (!deviceCode) {
+      deviceCode = 'PRO-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+      chrome.storage.local.set({ [PRO_DEVICE_CODE_KEY]: deviceCode });
+    }
+    if (proCodeDisplay) proCodeDisplay.textContent = '#' + deviceCode;
+
+    // 2. Check Pro Status
+    if (res[IS_PRO_KEY]) {
+      setProActiveUI(res[PRO_DATA_KEY]);
+    }
   });
 
-  closeKofiModal.addEventListener('click', () => {
-    kofiModal.hidden = true;
+  // 3. Open / Close Modal
+  proBadgeBtn.addEventListener('click', () => {
+    proModal.hidden = false;
   });
 
-  // Close modal when clicking outside the content
-  kofiModal.addEventListener('click', (e) => {
-    if (e.target === kofiModal) {
-      kofiModal.hidden = true;
+  closeProModal?.addEventListener('click', () => {
+    proModal.hidden = true;
+  });
+
+  proModal.addEventListener('click', (e) => {
+    if (e.target === proModal) proModal.hidden = true;
+  });
+
+  // 4. Copy Code Button
+  copyProCodeBtn?.addEventListener('click', () => {
+    const code = proCodeDisplay ? proCodeDisplay.textContent : '';
+    navigator.clipboard.writeText(code).then(() => {
+      copyProFeedback?.classList.add('visible');
+      setTimeout(() => copyProFeedback?.classList.remove('visible'), 2000);
+    });
+  });
+
+  // 5. Activate Pro Handler
+  activateProBtn?.addEventListener('click', async () => {
+    const key = (proKeyInput?.value || '').trim();
+    if (!key) {
+      if (proActivationStatus) {
+        proActivationStatus.textContent = 'Please enter your code or Ko-fi transaction ID.';
+        proActivationStatus.className = 'feedback-status error';
+        proActivationStatus.hidden = false;
+      }
+      return;
+    }
+
+    if (key.includes('@')) {
+      if (proActivationStatus) {
+        proActivationStatus.textContent = 'Please enter your private Ko-fi Transaction ID (from receipt) instead of an email address.';
+        proActivationStatus.className = 'feedback-status error';
+        proActivationStatus.hidden = false;
+      }
+      return;
+    }
+
+    activateProBtn.disabled = true;
+    activateProBtn.textContent = 'Verifying...';
+    if (proActivationStatus) proActivationStatus.hidden = true;
+
+    try {
+      const response = await fetch(VERIFY_PRO_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.valid) {
+        const proPayload = {
+          tier: data.tier,
+          name: data.supporter_name,
+          key: data.activation_key || key,
+          activatedAt: data.activated_at || Date.now()
+        };
+
+        chrome.storage.local.set({
+          [IS_PRO_KEY]: true,
+          [PRO_DATA_KEY]: proPayload
+        });
+
+        if (chrome.storage.sync) {
+          chrome.storage.sync.set({ [IS_PRO_KEY]: true, [PRO_DATA_KEY]: proPayload }, () => {});
+        }
+
+        setProActiveUI(proPayload);
+
+        if (proActivationStatus) {
+          proActivationStatus.textContent = 'Pro unlocked successfully! Thank you!';
+          proActivationStatus.className = 'feedback-status success';
+          proActivationStatus.hidden = false;
+        }
+
+        notifyContentScript({ type: 'proStatusUpdated', isPro: true, proData: proPayload });
+
+        setTimeout(() => {
+          if (proModal) proModal.hidden = true;
+        }, 1800);
+      } else {
+        if (proActivationStatus) {
+          proActivationStatus.textContent = data.error || 'Activation failed. Check code and try again.';
+          proActivationStatus.className = 'feedback-status error';
+          proActivationStatus.hidden = false;
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      if (proActivationStatus) {
+        proActivationStatus.textContent = 'Network error. Please try again.';
+        proActivationStatus.className = 'feedback-status error';
+        proActivationStatus.hidden = false;
+      }
+    } finally {
+      activateProBtn.disabled = false;
+      activateProBtn.textContent = 'Activate';
     }
   });
 }
@@ -891,7 +1081,7 @@ function initRatingUI(stats, hasRated, dismissedRating) {
 
       if (response.ok) {
         if (statusEl) {
-          statusEl.textContent = 'Thank you for your rating! ❤️';
+          statusEl.textContent = 'Thank you for your rating!';
           statusEl.className = 'rating-status success';
           statusEl.hidden = false;
         }
@@ -915,4 +1105,16 @@ function initRatingUI(stats, hasRated, dismissedRating) {
   });
 }
 
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+  init();
+  document.querySelectorAll('a[href*="ko-fi.com"]').forEach(link => {
+    link.addEventListener('click', () => {
+      trackEvent('kofi_clicked', { source: link.id || 'popup' });
+    });
+  });
+  document.querySelectorAll('a[href*="chromewebstore.google.com"], a[href*="addons.mozilla.org"]').forEach(link => {
+    link.addEventListener('click', () => {
+      trackEvent('review_clicked', { source: 'popup' });
+    });
+  });
+});

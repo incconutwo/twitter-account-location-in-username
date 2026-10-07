@@ -471,6 +471,58 @@ body {
   color: var(--accent-primary);
 }
 
+/* One-Click Block Button */
+.country-block-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+  outline: none;
+  user-select: none;
+}
+
+.country-block-btn:hover {
+  background: rgba(244, 33, 46, 0.1);
+  border-color: rgba(244, 33, 46, 0.45);
+  color: #f4212e;
+}
+
+.country-block-btn.is-blocked {
+  background: rgba(244, 33, 46, 0.15);
+  border-color: rgba(244, 33, 46, 0.45);
+  color: #f4212e;
+}
+
+.country-block-btn.is-blocked:hover {
+  background: rgba(244, 33, 46, 0.25);
+  border-color: rgba(244, 33, 46, 0.65);
+}
+
+.tooltip-badge-blocked {
+  display: inline-block;
+  background: rgba(244, 33, 46, 0.18);
+  color: #f4212e;
+  border: 1px solid rgba(244, 33, 46, 0.4);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  margin-left: 6px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* Empty State */
 .empty-state {
   flex: 1;
@@ -788,6 +840,213 @@ body {
   .changelog-grid .changelog-item:last-child {
     grid-column: span 1;
   }
+  .changelog-footer {
+    flex-direction: column;
+  }
 }
 
+/* Founder Note & Ko-fi CTA Styling */
+.kofi-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 9999px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
 
+.kofi-header-btn:hover {
+  background: var(--bg-primary);
+  border-color: var(--text-secondary);
+}
+
+.founder-note-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  text-align: left;
+}
+
+.founder-note-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  letter-spacing: -0.3px;
+}
+
+.founder-note-card p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  text-align: left;
+}
+
+.founder-note-card p:last-child {
+  margin-bottom: 0;
+}
+
+.founder-note-card strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.founder-note-highlight {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  padding: 12px 16px;
+  border-radius: 8px;
+  color: var(--text-primary) !important;
+  font-size: 14px;
+}
+
+.kofi-btn-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.kofi-btn-link:hover {
+  opacity: 0.9;
+  transform: scale(0.98);
+}
+
+.changelog-grid:empty {
+  display: none;
+}
+
+/* Ko-fi iframe Modal */
+.kofi-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.kofi-modal-backdrop.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.kofi-modal-card {
+  width: 100%;
+  max-width: 440px;
+  height: min(720px, 90dvh);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: scale(0.95) translateY(10px);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.kofi-modal-backdrop.is-open .kofi-modal-card {
+  transform: scale(1) translateY(0);
+}
+
+.kofi-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.kofi-modal-title-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kofi-header-icon {
+  font-size: 18px;
+}
+
+.kofi-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.kofi-modal-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 16px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.kofi-modal-close-btn:hover {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.kofi-iframe-container {
+  flex-grow: 1;
+  width: 100%;
+  background: #ffffff; /* Ko-fi iframe expects white bg for light mode embedded */
+  position: relative;
+}
+
+.kofi-modal-footer {
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border-color);
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.kofi-fallback-link {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.2s;
+  font-weight: 500;
+}
+
+.kofi-fallback-link:hover {
+  color: var(--text-primary);
+}

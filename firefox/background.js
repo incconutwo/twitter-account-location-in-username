@@ -1,9 +1,10 @@
 // Centralized Settings Manager
 // Settings are loaded once here and shared with all content scripts via messaging
 
-const SETTINGS_KEYS = ['extension_enabled', 'blocked_countries', 'verified_only_mode', 'auto_block_mode', 'passport_mode', 'dev_data_source', 'always_load_comments'];
+const SETTINGS_KEYS = ['extension_enabled', 'blocked_countries', 'verified_only_mode', 'auto_block_mode', 'passport_mode', 'dev_data_source', 'always_load_comments', 'block_vpn_mode', 'bypass_followed_mode'];
 const STATS_KEY = 'extension_stats';
 const TOTAL_COUNTRIES = 195;
+const TELEMETRY_ENDPOINT = 'https://twitter-countries-api.tnemoroccan.workers.dev/telemetry';
 
 let cachedSettings = null;
 let cachedStats = null;
@@ -19,34 +20,81 @@ async function loadSettings() {
     auto_block_mode: result.auto_block_mode ?? false,
     passport_mode: result.passport_mode ?? true,
     dev_data_source: result.dev_data_source || 'auto',
-    always_load_comments: result.always_load_comments ?? false
+    always_load_comments: result.always_load_comments ?? false,
+    block_vpn_mode: result.block_vpn_mode ?? false,
+    bypass_followed_mode: result.bypass_followed_mode !== false
   };
   return cachedSettings;
+}
+
+function normalizeStats(raw) {
+  const s = raw || {};
+  return {
+    hiddenPosts: Number(s.hiddenPosts) || 0,
+    blockedAccounts: Number(s.blockedAccounts) || 0,
+    seenCountries: (s.seenCountries && typeof s.seenCountries === 'object') ? s.seenCountries : {},
+    totalScanned: Number(s.totalScanned) || 0,
+    shownMilestones: Array.isArray(s.shownMilestones) ? s.shownMilestones : []
+  };
 }
 
 // Load stats from storage
 async function loadStats() {
   const result = await chrome.storage.local.get(STATS_KEY);
-  const rawStats = result[STATS_KEY] || {};
-  cachedStats = {
-    hiddenPosts: rawStats.hiddenPosts || 0,
-    blockedAccounts: rawStats.blockedAccounts || 0,
-    seenCountries: rawStats.seenCountries || {},
-    totalScanned: rawStats.totalScanned || 0,
-    shownMilestones: rawStats.shownMilestones || []
-  };
+  cachedStats = normalizeStats(result[STATS_KEY]);
   return cachedStats;
 }
 
+let isSavingStats = false;
 function saveStatsDebounced() {
   if (statsSaveTimer) clearTimeout(statsSaveTimer);
   statsSaveTimer = setTimeout(() => {
-    chrome.storage.local.set({ [STATS_KEY]: cachedStats });
+    statsSaveTimer = null;
+    isSavingStats = true;
+    chrome.storage.local.set({ [STATS_KEY]: cachedStats }, () => {
+      isSavingStats = false;
+    });
   }, 1000);
 }
 
-// Initialize settings and stats on startup
-const initPromise = Promise.all([loadSettings(), loadStats()]);
+// Telemetry & Anonymous Analytics Relay (Zero User Disruption)
+async function sendTelemetry(urlPath, eventName, data) {
+  try {
+    const payload = {
+      url: urlPath || '/active',
+      name: eventName || null,
+      data: data || {},
+      language: navigator.language || 'en'
+    };
+    await fetch(TELEMETRY_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (_) {
+    // Fail-safe, non-blocking: silently ignore network errors
+  }
+}
+
+async function checkDailyActive() {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { last_telemetry_date } = await chrome.storage.local.get('last_telemetry_date');
+    if (last_telemetry_date !== today) {
+      await chrome.storage.local.set({ last_telemetry_date: today });
+      const version = chrome.runtime.getManifest().version;
+      sendTelemetry('/active', 'daily_active', { version });
+    }
+  } catch (_) {}
+}
+
+// Initialize settings, stats, and daily active heartbeat
+const initPromise = Promise.all([loadSettings(), loadStats()]).then(() => {
+  checkDailyActive();
+});
+chrome.runtime.onStartup?.addListener(() => {
+  checkDailyActive();
+});
 
 // Listen for settings changes and update cache
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -59,8 +107,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       }
     }
 
-    if (changes[STATS_KEY]) {
-      cachedStats = changes[STATS_KEY].newValue;
+    if (changes[STATS_KEY] && !isSavingStats) {
+      cachedStats = normalizeStats(changes[STATS_KEY].newValue);
     }
     
     // Only broadcast settings update if settings actually changed
@@ -80,19 +128,36 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 const MILESTONE_CONFIGS = {
   100: {
-    message: "100 spam posts hidden! 🚩 Your timeline is looking cleaner.\n\nMind leaving a quick review to help others find us?",
-    buttonText: "Leave a Review ⭐",
-    url: "https://addons.mozilla.org/en-US/firefox/addon/x-twitter-flags-blocker/reviews/"
+    message: "100 spam posts hidden! Your timeline is looking cleaner.\n\nMind leaving a quick review to help others find us?",
+    buttonText: "Leave a Review",
+    url: "https://addons.mozilla.org/en-US/firefox/addon/x-twitter-flags-blocker/reviews/?utm_source=milestone100"
   },
   500: {
-    message: "Whoa! You've officially hidden 500 spam posts. 🛡️\n\nOur Cloudflare database processes thousands of requests daily to keep your feed clean. To help cover server costs and keep this free, please consider a $3 donation!",
-    buttonText: "Send a Pizza Slice 🍕",
+    message: "Whoa! You've officially hidden 500 spam posts.\n\nOur Cloudflare database processes thousands of requests daily to keep your feed clean. Support with $5 on Ko-fi to unlock Lifetime Pro!",
+    buttonText: "Support $5 (Get Lifetime Pro)",
     url: "https://ko-fi.com/incconutwo?ref=milestone500"
   },
   2500: {
-    message: "2,500+ posts hidden! 🚀 You're a power user. Help keep the servers running and keeping it free for everyone by donating $5.",
-    buttonText: "Donate $5 🍕",
+    message: "2,500+ posts hidden! You're a power user. Help keep the servers running and unlock Lifetime Pro by supporting $5 on Ko-fi!",
+    buttonText: "Support $5 (Lifetime Pro)",
     url: "https://ko-fi.com/incconutwo?ref=milestone2500"
+  }
+};
+
+const SCANNED_MILESTONE_CONFIGS = {
+  500: {
+    key: 'scanned_500',
+    count: 500,
+    message: "You've spotted 500 user locations on X!\n\nOur community database runs 24/7 to show instant flags without slowing down your feed. Chip in $5 on Ko-fi to help cover server costs & get Lifetime Pro!",
+    buttonText: "Support $5 (Get Lifetime Pro)",
+    url: "https://ko-fi.com/incconutwo?ref=scanned500"
+  },
+  2500: {
+    key: 'scanned_2500',
+    count: 2500,
+    message: "2,500+ user locations revealed!\n\nYou're a true power user! Help keep this extension 100% independent and ad-free; support with $5 on Ko-fi and get Lifetime Pro!",
+    buttonText: "Support $5 (Lifetime Pro)",
+    url: "https://ko-fi.com/incconutwo?ref=scanned2500"
   }
 };
 
@@ -103,13 +168,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Will respond asynchronously
   }
 
+  if (request.type === 'sendTelemetry') {
+    sendTelemetry(request.url, request.eventName, request.data);
+    return false;
+  }
+
   initPromise.then(() => {
     if (request.type === 'countrySpotted') {
       handleCountrySpotted(request, sender);
     } else if (request.type === 'incrementStat') {
       handleIncrementStat(request, sender);
     } else if (request.type === 'testMilestone') {
-      const config = MILESTONE_CONFIGS[request.count];
+      const config = MILESTONE_CONFIGS[request.count] || SCANNED_MILESTONE_CONFIGS[request.count];
       if (config) {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
           if (tabs[0]?.id) {
@@ -135,7 +205,7 @@ function handleCountrySpotted(request, sender, sendResponse) {
   cachedStats.seenCountries[country] = (cachedStats.seenCountries[country] || 0) + 1;
   cachedStats.totalScanned++;
 
-  if (isNew && cachedSettings.passport_mode) {
+  if (isNew && cachedSettings.passport_mode && sender?.tab?.id) {
     const discoveredCount = Object.keys(cachedStats.seenCountries).length;
     chrome.tabs.sendMessage(sender.tab.id, {
       type: 'showDiscoveryToast',
@@ -144,6 +214,22 @@ function handleCountrySpotted(request, sender, sendResponse) {
       discoveredCount: discoveredCount,
       total: TOTAL_COUNTRIES
     }).catch(() => {});
+  }
+
+  // Trigger Ko-fi milestone toast for users who use the extension for flags (500 & 2,500 accounts scanned)
+  const scannedCount = cachedStats.totalScanned;
+  const scannedMilestone = SCANNED_MILESTONE_CONFIGS[scannedCount];
+  if (scannedMilestone && !cachedStats.shownMilestones.includes(scannedMilestone.key)) {
+    cachedStats.shownMilestones.push(scannedMilestone.key);
+    if (sender?.tab?.id) {
+      chrome.tabs.sendMessage(sender.tab.id, {
+        type: 'showMilestoneToast',
+        count: scannedMilestone.count,
+        message: scannedMilestone.message,
+        buttonText: scannedMilestone.buttonText,
+        url: scannedMilestone.url
+      }).catch(() => {});
+    }
   }
 
   saveStatsDebounced();
@@ -185,7 +271,14 @@ chrome.runtime.onInstalled.addListener((details) => {
     }
   });
 
-  if (details && details.reason === 'update') {
+  const version = chrome.runtime.getManifest().version;
+  if (details && details.reason === 'install') {
+    sendTelemetry('/installed', 'extension_installed', { version });
+  } else if (details && details.reason === 'update') {
+    sendTelemetry('/updated', 'extension_updated', {
+      version,
+      previous_version: details.previousVersion || 'unknown'
+    });
     chrome.tabs.create({
       url: chrome.runtime.getURL('dashboard.html?update=true')
     });

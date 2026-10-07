@@ -2,7 +2,10 @@
 
 // Constants
 const STATS_KEY = 'extension_stats';
+const BLOCKED_COUNTRIES_KEY = 'blocked_countries';
 const REGIONAL_INDICATOR_OFFSET = 127397;
+
+let blockedCountries = [];
 
 // DOM Elements
 const els = {
@@ -20,6 +23,20 @@ const els = {
   confirmResetBtn: document.getElementById('confirmReset'),
   cancelResetBtn: document.getElementById('cancelReset')
 };
+
+// --- Telemetry & Analytics ---
+function trackDashboardEvent(name, data) {
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({
+        type: 'sendTelemetry',
+        url: '/dashboard',
+        eventName: name,
+        data
+      }).catch(() => {});
+    }
+  } catch (_) {}
+}
 
 // --- Helpers ---
 
@@ -55,13 +72,7 @@ async function loadAndRenderMap(countryCounts) {
     if (!res.ok) throw new Error('Failed to load map');
     
     const svgText = await res.text();
-    const parser = new DOMParser();
-    const parsedDoc = parser.parseFromString(svgText, 'image/svg+xml');
-    const svgElement = parsedDoc.documentElement;
-    if (svgElement.querySelector('parsererror')) {
-      throw new Error('SVG parsing failed');
-    }
-    els.mapContainer.replaceChildren(svgElement);
+    els.mapContainer.innerHTML = svgText;
     
     // Process map interaction
     const svg = els.mapContainer.querySelector('svg');
@@ -121,24 +132,16 @@ async function loadAndRenderMap(countryCounts) {
     svg.addEventListener('mouseleave', hideTooltip);
     
   } catch (e) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'map-error';
-    errorDiv.textContent = `Failed to load map: ${e.message}`;
-    els.mapContainer.replaceChildren(errorDiv);
+    els.mapContainer.innerHTML = `<div class="map-error">Failed to load map: ${e.message}</div>`;
   }
 }
 
 function showTooltip(e, country, flag, count) {
   els.tooltip.hidden = false;
   // Use Twemoji image instead of text flag mainly for Windows support
-  const tooltipImg = document.createElement('img');
-  tooltipImg.src = getTwemojiUrl(flag);
-  tooltipImg.alt = flag;
-  tooltipImg.style.width = '1.5em';
-  tooltipImg.style.height = 'auto';
-  tooltipImg.style.display = 'block';
-  els.tooltipFlag.replaceChildren(tooltipImg);
-  els.tooltipCountry.textContent = country;
+  els.tooltipFlag.innerHTML = `<img src="${getTwemojiUrl(flag)}" alt="${flag}" style="width:1.5em; height:auto; display:block;">`;
+  const isBlocked = blockedCountries.includes(country);
+  els.tooltipCountry.innerHTML = `${country}${isBlocked ? ' <span class="tooltip-badge-blocked">Blocked</span>' : ''}`;
   els.tooltipCount.textContent = `${formatCount(parseInt(count))} users`;
   
   // Positioning
@@ -162,6 +165,49 @@ function showTooltip(e, country, flag, count) {
 
 function hideTooltip() {
   els.tooltip.hidden = true;
+}
+
+// --- Block Management ---
+
+function toggleBlockCountry(countryName) {
+  const isBlocked = blockedCountries.includes(countryName);
+  if (isBlocked) {
+    blockedCountries = blockedCountries.filter(c => c !== countryName);
+  } else {
+    blockedCountries.push(countryName);
+  }
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.set({ [BLOCKED_COUNTRIES_KEY]: blockedCountries }, () => {
+      // Notify active tabs so filters apply immediately
+      if (chrome.tabs && chrome.tabs.query) {
+        chrome.tabs.query({ url: ['https://x.com/*', 'https://twitter.com/*'] }, (tabs) => {
+          for (const tab of tabs) {
+            chrome.tabs.sendMessage(tab.id, {
+              type: 'blockedCountriesUpdate',
+              countries: blockedCountries
+            }).catch(() => {});
+          }
+        });
+      }
+    });
+  }
+
+  trackDashboardEvent('country_toggled', { country: countryName, action: isBlocked ? 'unblock' : 'block' });
+  updateCountryBlockButtons();
+}
+
+const BLOCKED_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Blocked';
+
+function updateCountryBlockButtons() {
+  document.querySelectorAll('.country-block-btn').forEach(btn => {
+    const country = btn.dataset.country;
+    if (!country) return;
+    const isBlocked = blockedCountries.includes(country);
+    btn.classList.toggle('is-blocked', isBlocked);
+    btn.innerHTML = isBlocked ? BLOCKED_ICON_SVG : 'Block';
+    btn.title = isBlocked ? `Unblock ${country}` : `Block posts from ${country}`;
+  });
 }
 
 // --- List Rendering ---
@@ -189,50 +235,36 @@ function renderCountryList(sortedData) {
     
     // Bar width percentage
     const barWidth = (item.count / maxCount) * 100;
+    const isBlocked = blockedCountries.includes(item.country);
     
-    const rankDiv = document.createElement('div');
-    rankDiv.className = rankClass;
-    rankDiv.textContent = `#${index + 1}`;
-    div.appendChild(rankDiv);
-
-    const flagDiv = document.createElement('div');
-    flagDiv.className = 'country-flag';
-    const flagImg = document.createElement('img');
-    flagImg.src = getTwemojiUrl(item.flag);
-    flagImg.alt = item.flag;
-    flagImg.loading = 'lazy';
-    flagDiv.appendChild(flagImg);
-    div.appendChild(flagDiv);
-
-    const infoDiv = document.createElement('div');
-    infoDiv.className = 'country-info';
-
-    const flexDiv = document.createElement('div');
-    flexDiv.style.display = 'flex';
-    flexDiv.style.justifyContent = 'space-between';
-    flexDiv.style.alignItems = 'center';
-
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'country-name';
-    nameSpan.textContent = item.country;
-    flexDiv.appendChild(nameSpan);
-
-    const countSpan = document.createElement('span');
-    countSpan.className = 'country-count';
-    countSpan.textContent = formatCount(item.count);
-    flexDiv.appendChild(countSpan);
-
-    infoDiv.appendChild(flexDiv);
-
-    const barDiv = document.createElement('div');
-    barDiv.className = 'country-bar';
-    const barFill = document.createElement('div');
-    barFill.className = 'country-bar-fill';
-    barFill.style.width = `${barWidth}%`;
-    barDiv.appendChild(barFill);
-    infoDiv.appendChild(barDiv);
-
-    div.appendChild(infoDiv);
+    div.innerHTML = `
+      <div class="${rankClass}">#${index + 1}</div>
+      <div class="country-flag">
+        <img src="${getTwemojiUrl(item.flag)}" alt="${item.flag}" loading="lazy">
+      </div>
+      <div class="country-info">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span class="country-name"></span>
+          <span class="country-count">${formatCount(item.count)}</span>
+        </div>
+        <div class="country-bar">
+          <div class="country-bar-fill" style="width: ${barWidth}%"></div>
+        </div>
+      </div>
+      <button class="country-block-btn ${isBlocked ? 'is-blocked' : ''}" data-country="${item.country}" title="${isBlocked ? `Unblock ${item.country}` : `Block posts from ${item.country}`}">
+        ${isBlocked ? BLOCKED_ICON_SVG : 'Block'}
+      </button>
+    `;
+    
+    div.querySelector('.country-name').textContent = item.country;
+    
+    const blockBtn = div.querySelector('.country-block-btn');
+    if (blockBtn) {
+      blockBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleBlockCountry(item.country);
+      });
+    }
     
     // Add hover highlighting link to map
     const iso = getIsoCodeFromEmoji(item.flag);
@@ -272,10 +304,11 @@ function setupShareButton(totalScanned, countryArray, totalCountries) {
   if (!btn) return;
   
   btn.addEventListener('click', () => {
-    const rankEmojis = ['🥇', '🥈', '🥉'];
-    const top3 = countryArray.slice(0, 3).map((c, i) => `${rankEmojis[i]} ${c.flag} ${c.country} (${formatCount(c.count)} users)`).join('\n');
+    trackDashboardEvent('share_clicked');
+    const rankLabels = ['1.', '2.', '3.'];
+    const top3 = countryArray.slice(0, 3).map((c, i) => `${rankLabels[i]} ${c.flag} ${c.country} (${formatCount(c.count)} users)`).join('\n');
     
-    const text = `🛂 My X Feed Passport is getting stamped!\nI've discovered users from ${totalCountries}/195 countries on my timeline.\n\nMy top locations:\n${top3}\n\nTrack your feed geography: https://addons.mozilla.org/en-US/firefox/addon/x-twitter-flags-blocker/\n\n#DataViz #OpenSource`;
+    const text = `My X Feed Passport is getting stamped!\nI've discovered users from ${totalCountries}/195 countries on my timeline.\n\nMy top locations:\n${top3}\n\nTrack your feed geography: https://addons.mozilla.org/en-US/firefox/addon/x-twitter-flags-blocker/\n\n#DataViz #OpenSource`;
     
     const url = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text);
     const width = 600;
@@ -301,7 +334,7 @@ function setupResetButton() {
 
   els.confirmResetBtn.addEventListener('click', () => {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.set({ [STATS_KEY]: { seenCountries: {}, totalScanned: 0 } }, () => {
+      chrome.storage.local.set({ [STATS_KEY]: { hiddenPosts: 0, blockedAccounts: 0, seenCountries: {}, totalScanned: 0, shownMilestones: [] } }, () => {
         window.location.reload();
       });
     } else {
@@ -321,23 +354,176 @@ function setupChangelogModal() {
     const changelogModal = document.getElementById('changelogModal');
     if (changelogModal) {
       changelogModal.hidden = false;
-      
+
+      // Track active visible time spent reading the Update / Founder Note modal
+      let activeMs = 0;
+      let visibleStart = document.visibilityState === 'visible' ? Date.now() : null;
+      let hasLoggedOpen = false;
+      let hasLoggedExit = false;
+
+      const logOpenIfVisible = () => {
+        if (!hasLoggedOpen && document.visibilityState === 'visible') {
+          hasLoggedOpen = true;
+          visibleStart = Date.now();
+          trackDashboardEvent('changelog_opened', { version: '1.2.2' });
+        }
+      };
+      logOpenIfVisible();
+
+      const flushActiveTime = () => {
+        if (visibleStart !== null) {
+          activeMs += Date.now() - visibleStart;
+          visibleStart = document.visibilityState === 'visible' ? Date.now() : null;
+        }
+      };
+
+      const logChangelogExit = (exitAction) => {
+        if (hasLoggedExit || !hasLoggedOpen) return;
+        hasLoggedExit = true;
+        flushActiveTime();
+        const activeSeconds = Math.round(activeMs / 1000);
+        const bucket = activeSeconds < 3 ? '<3s_skim' : activeSeconds < 10 ? '3-10s_glance' : activeSeconds < 30 ? '10-30s_read' : '30s+_deep_read';
+        trackDashboardEvent('changelog_engagement', {
+          version: '1.2.2',
+          active_seconds: activeSeconds,
+          read_bucket: bucket,
+          exit_action: exitAction
+        });
+      };
+
+      document.addEventListener('visibilitychange', () => {
+        if (changelogModal.hidden) return;
+        if (document.visibilityState === 'visible') {
+          logOpenIfVisible();
+          visibleStart = Date.now();
+        } else {
+          flushActiveTime();
+        }
+      });
+
+      window.addEventListener('beforeunload', () => {
+        if (!changelogModal.hidden) logChangelogExit('tab_closed');
+      });
+
       const closeBtn = document.getElementById('closeChangelog');
       if (closeBtn) {
         closeBtn.addEventListener('click', () => {
+          logChangelogExit('dismiss_clicked');
           changelogModal.hidden = true;
+        });
+      }
+
+      const reviewBtn = changelogModal.querySelector('.review-btn-link');
+      if (reviewBtn) {
+        reviewBtn.addEventListener('click', () => {
+          flushActiveTime();
+          trackDashboardEvent('review_clicked', {
+            source: 'update_v122',
+            active_seconds_before_click: Math.round(activeMs / 1000)
+          });
+        });
+      }
+
+      const kofiChangelogBtn = changelogModal.querySelector('.kofi-btn-link');
+      if (kofiChangelogBtn) {
+        kofiChangelogBtn.addEventListener('click', () => {
+          flushActiveTime();
+          logChangelogExit('kofi_clicked');
         });
       }
     }
   }
 }
 
+function setupKofiModal() {
+  const backdrop = document.getElementById('kofi-modal-backdrop');
+  const closeBtn = document.getElementById('kofi-modal-close');
+  const iframe = document.getElementById('kofi-embed-iframe');
+  const fallbackLink = document.querySelector('.kofi-fallback-link');
+
+  if (!backdrop || !iframe) return;
+
+  const KOFI_EMBED_URL = 'https://ko-fi.com/incconutwo/?hidefeed=true&widget=true&embed=true';
+  let modalOpenedAt = null;
+  let currentSource = 'unknown';
+
+  function openModal(e) {
+    if (e) e.preventDefault();
+    const link = e?.currentTarget;
+    let source = 'dashboard';
+    try {
+      if (link && link.href) {
+        const u = new URL(link.href);
+        source = u.searchParams.get('ref') || 'dashboard';
+      }
+    } catch (_) {}
+
+    currentSource = source;
+    modalOpenedAt = Date.now();
+    trackDashboardEvent('kofi_clicked', { source });
+
+    if (!iframe.src || iframe.src === 'about:blank' || iframe.src !== KOFI_EMBED_URL) {
+      iframe.src = KOFI_EMBED_URL;
+    }
+    backdrop.classList.add('is-open');
+    backdrop.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeModal() {
+    if (!backdrop.classList.contains('is-open')) return;
+    backdrop.classList.remove('is-open');
+    backdrop.setAttribute('aria-hidden', 'true');
+    if (modalOpenedAt) {
+      const durationSec = Math.round((Date.now() - modalOpenedAt) / 1000);
+      trackDashboardEvent('kofi_modal_closed', {
+        source: currentSource,
+        duration_seconds: durationSec
+      });
+      modalOpenedAt = null;
+    }
+  }
+
+  // Bind to all Ko-fi links across the site except the fallback external link
+  document.querySelectorAll('a[href*="ko-fi.com/incconutwo"]:not(.kofi-fallback-link)').forEach(link => {
+    link.addEventListener('click', openModal);
+  });
+
+  if (fallbackLink) {
+    fallbackLink.addEventListener('click', () => {
+      trackDashboardEvent('kofi_external_fallback', { source: currentSource });
+    });
+  }
+
+  if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeModal();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && backdrop.classList.contains('is-open')) {
+      closeModal();
+    }
+  });
+}
+
 async function init() {
   // Load data
   let stats = { seenCountries: {}, totalScanned: 0 };
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-    const res = await chrome.storage.local.get(STATS_KEY);
+    const res = await chrome.storage.local.get([STATS_KEY, BLOCKED_COUNTRIES_KEY]);
     stats = res[STATS_KEY] || stats;
+    blockedCountries = Array.isArray(res[BLOCKED_COUNTRIES_KEY]) ? res[BLOCKED_COUNTRIES_KEY] : [];
+
+    // Listen for storage changes from popup
+    if (chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes[BLOCKED_COUNTRIES_KEY]) {
+          blockedCountries = changes[BLOCKED_COUNTRIES_KEY].newValue || [];
+          updateCountryBlockButtons();
+        }
+      });
+    }
   } else {
     // Mock data for local development/testing
     stats = {
@@ -379,6 +565,7 @@ async function init() {
   setupShareButton(totalScanned, countryArray, Object.keys(seenCountries).length);
   setupResetButton();
   setupChangelogModal();
+  setupKofiModal();
 
   // Animate Global Exploration Progress
   const goalPercentage = document.getElementById('goalPercentage');
@@ -395,6 +582,7 @@ async function init() {
   }
 
   await loadAndRenderMap(seenCountries);
+  trackDashboardEvent('dashboard_open');
 }
 
 document.addEventListener('DOMContentLoaded', init);

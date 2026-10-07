@@ -11,7 +11,12 @@
   <header class="dashboard-header">
     <div class="header-content">
       <div class="header-left">
-        <span class="header-icon">🌍</span>
+        <span class="header-icon">
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10" fill="#1d9bf0" fill-opacity="0.15" stroke="#1d9bf0" stroke-width="1.75"/>
+            <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="#00ba7c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
         <div class="header-text">
           <h1>Feed Geography</h1>
           <p class="header-subtitle">Your Twitter Timeline Around the World</p>
@@ -32,8 +37,15 @@
           </div>
           <span class="header-stat-label">Countries Discovered</span>
         </div>
-        <div class="header-stat">
-           <button id="shareBtn" class="share-btn">Share on X 🐦</button>
+        <div class="header-stat" style="display: flex; flex-direction: row; align-items: center; gap: 10px;">
+           <a href="https://ko-fi.com/incconutwo?ref=dashboard_header" target="_blank" class="kofi-header-btn">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="#ff5e5b" xmlns="http://www.w3.org/2000/svg"><path d="M23.881 8.948c-.773-4.085-4.859-4.593-4.859-4.593H.723c-.604 0-.679.798-.679.798s-.082 7.324-.022 11.822c.164 2.424 2.586 2.672 2.586 2.672s8.267-.023 11.966-.049c2.438-.426 2.683-2.566 2.658-3.734 4.352.24 7.422-2.831 6.649-6.916zm-11.062 3.511c-1.246 1.453-4.011 3.976-4.011 3.976s-.121.119-.31.023c-.076-.057-.108-.09-.108-.09-.443-.441-3.368-3.049-4.034-3.954-.709-.965-1.041-2.7-.091-3.71.951-1.01 3.005-1.086 4.363.407 0 0 1.565-1.782 3.468-.963 1.904.82 1.832 3.011.723 4.311zm6.173.478c-.928.116-1.682.028-1.682.028V7.284h1.77s1.971.551 1.971 2.638c0 1.913-.985 2.667-2.059 3.015z"/></svg>
+             Support on Ko-fi
+           </a>
+           <button id="shareBtn" class="share-btn">
+             Share on 
+             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+           </button>
         </div>
       </div>
     </div>
@@ -88,7 +100,12 @@
       
       <!-- Empty State -->
       <div class="empty-state" id="emptyState" hidden>
-        <div class="empty-icon">📭</div>
+        <div class="empty-icon">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="3" y="4" width="18" height="16" rx="3" fill="#1d9bf0" fill-opacity="0.12" stroke="#536471" stroke-width="1.5"/>
+            <path d="M3 13h5l2 3h4l2-3h5" stroke="#1d9bf0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
         <h3>No data yet</h3>
         <p>Browse your Twitter feed to start tracking countries.</p>
       </div>
@@ -97,7 +114,7 @@
 
   <!-- Footer -->
   <footer class="dashboard-footer">
-    <p>Data collected locally • <a href="https://github.com/incconutwo/twitter-account-location-in-username" target="_blank">⭐ Star on GitHub</a></p>
+    <p>Data collected locally • <a href="https://ko-fi.com/incconutwo?ref=dashboard_footer" target="_blank" style="display:inline-flex;align-items:center;gap:4px;vertical-align:middle;"><svg width="14" height="14" viewBox="0 0 24 24" fill="#ff5e5b"><path d="M23.881 8.948c-.773-4.085-4.859-4.593-4.859-4.593H.723c-.604 0-.679.798-.679.798s-.082 7.324-.022 11.822c.164 2.424 2.586 2.672 2.586 2.672s8.267-.023 11.966-.049c2.438-.426 2.683-2.566 2.658-3.734 4.352.24 7.422-2.831 6.649-6.916zm-11.062 3.511c-1.246 1.453-4.011 3.976-4.011 3.976s-.121.119-.31.023c-.076-.057-.108-.09-.108-.09-.443-.441-3.368-3.049-4.034-3.954-.709-.965-1.041-2.7-.091-3.71.951-1.01 3.005-1.086 4.363.407 0 0 1.565-1.782 3.468-.963 1.904.82 1.832 3.011.723 4.311zm6.173.478c-.928.116-1.682.028-1.682.028V7.284h1.77s1.971.551 1.971 2.638c0 1.913-.985 2.667-2.059 3.015z"/></svg> Support on Ko-fi</a> • <a href="https://github.com/incconutwo/twitter-account-location-in-username" target="_blank" style="display:inline-flex;align-items:center;gap:4px;vertical-align:middle;"><svg width="14" height="14" viewBox="0 0 24 24" fill="#f59e0b"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> Star on GitHub</a></p>
   </footer>
 
   <!-- Reset Confirmation Modal -->
@@ -105,7 +122,13 @@
     <div class="modal-backdrop"></div>
     <div class="modal-content">
       <div class="modal-header">
-        <div class="modal-icon">⚠️</div>
+        <div class="modal-icon">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="#f4212e" fill-opacity="0.15" stroke="#f4212e" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="12" y1="9" x2="12" y2="13" stroke="#f4212e" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="17" r="1" fill="#f4212e"/>
+          </svg>
+        </div>
         <h2>Reset All Data?</h2>
       </div>
       <div class="modal-body">
@@ -123,70 +146,158 @@
     <div class="modal-backdrop"></div>
     <div class="modal-content changelog-modal-content">
       <div class="modal-header">
-        <div class="modal-icon">🌍</div>
-        <h2>Update: Location Flag & Blocker (v1.2.0)</h2>
+        <div class="modal-icon">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10" fill="#1d9bf0" fill-opacity="0.15" stroke="#1d9bf0" stroke-width="1.75"/>
+            <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="#00ba7c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <h2>Update: Location Flag & Blocker (v1.2.2)</h2>
       </div>
       <div class="modal-body changelog-body">
-        <p class="changelog-intro">We've introduced several updates to improve your experience and provide more context while you browse:</p>
-        
-        <div class="changelog-grid">
+        <!-- Founder Note -->
+        <div class="founder-note-card">
+          <div class="founder-note-title" style="display:flex;align-items:center;gap:8px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="2" y="4" width="20" height="16" rx="3" fill="#1d9bf0" fill-opacity="0.15" stroke="#1d9bf0" stroke-width="1.75"/>
+              <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" stroke="#1d9bf0" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            A Quick Note from the Creator
+          </div>
+          <p>
+            Over the past few weeks, our community has grown past <strong>15,000+ active users with a 4.98 rating</strong>. Thank you so much for your feedback and support on Chrome and Firefox!
+          </p>
+          <p>
+            Maintaining this extension takes continuous engineering time; adapting to X’s API changes, running our Cloudflare database for instant lookups, and keeping your feed fast and private. While most extensions in this space sell out, inject ads, or lock basic features behind a paywall, <strong>I will never do that.</strong>
+          </p>
+          <p class="founder-note-highlight" style="display:flex;align-items:flex-start;gap:10px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;margin-top:2px;" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="#00ba7c" fill-opacity="0.18" stroke="#00ba7c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="m9 12 2 2 4-4" stroke="#00ba7c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span><strong>My commitment to you:</strong> All existing features (country flags, local time, basic country blocking, and timeline detection) will remain <strong>100% FREE forever</strong>.</span>
+          </p>
+          <p>
+            To keep this project independent and fund new power-user features, I will be introducing an optional <strong>Supporter / Pro tier</strong> in an upcoming update. If this extension brings you value, even a small <strong>$5 coffee on Ko-fi</strong> helps tremendously; and <strong>anyone who supports on Ko-fi automatically gets Lifetime Pro status!</strong> Thank you so much to anyone that will support me and the project!
+          </p>
+        </div>
+
+        <!-- Changelog Section -->
+        <div class="changelog-grid" id="changelogItemsGrid">
           <div class="changelog-item">
-            <span class="changelog-emoji">📊</span>
+            <span class="changelog-emoji">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="#f59e0b" fill-opacity="0.16" stroke="#f59e0b" stroke-width="1.75" stroke-linejoin="round"/>
+                <path d="M12 8v4m0 4h.01" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </span>
             <div class="changelog-text">
-              <strong>Feed Geography Dashboard</strong>
-              Visualize your timeline’s global demographics on a hover-interactive world map. Open your extension popup and click "Open Feed Dashboard" to see your stats!
-              <div class="changelog-image-wrapper">
-                <img src="images/Feed-dashboard.png" alt="Feed Geography Dashboard Preview" class="changelog-preview-img">
-              </div>
+              <strong>Block Inaccurate Region (VPN)</strong>
+              New filter option in the popup to automatically hide or block accounts whose location is flagged by X as inaccurate, broad-region, or masked via VPN.
             </div>
           </div>
 
           <div class="changelog-item">
-            <span class="changelog-emoji">🕒</span>
+            <span class="changelog-emoji">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" stroke="#00ba7c" stroke-width="1.75" stroke-linecap="round"/>
+                <circle cx="9" cy="7" r="4" fill="#00ba7c" fill-opacity="0.16" stroke="#00ba7c" stroke-width="1.75"/>
+                <path d="m16 11 2 2 4-4" stroke="#00ba7c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
             <div class="changelog-text">
-              <strong>Local Time & Night indicator</strong>
-              The extension now resolves timezones to show localized clocks. If it is currently night-time (10:00 PM – 6:00 AM) where a user is located, a moon emoji (🌙) will appear next to their clock.
-              <div class="changelog-image-wrapper">
-                <img src="images/LocalTimeNightindicator.png" alt="Local Time & Night Indicator Preview" class="changelog-preview-img">
-              </div>
+              <strong>Bypass Followed Accounts (Most Requested!)</strong>
+              One of your most requested features by far! Enabled by default, accounts you actively follow are now protected and will never be hidden or auto-blocked, even if they match a blocked country.
             </div>
           </div>
 
           <div class="changelog-item">
-            <span class="changelog-emoji">⚠️</span>
+            <span class="changelog-emoji">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" fill="#1d9bf0" fill-opacity="0.15" stroke="#1d9bf0" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                <line x1="9" y1="3" x2="9" y2="18" stroke="#1d9bf0" stroke-width="1.75"/>
+                <line x1="15" y1="6" x2="15" y2="21" stroke="#1d9bf0" stroke-width="1.75"/>
+              </svg>
+            </span>
             <div class="changelog-text">
-              <strong>Approximate Location Warnings</strong>
-              When profile metadata indicates a broad regional location rather than an accurate city or coordinate, a warning icon (⚠️) will appear next to the flag to provide proper context.
+              <strong>One-Click Dashboard Blocking</strong>
+              Block or unblock countries directly from the "Top Countries" sidebar in the Feed Geography Dashboard, complete with live "Blocked" badges on the world map.
             </div>
           </div>
 
           <div class="changelog-item">
-            <span class="changelog-emoji">🛂</span>
+            <span class="changelog-emoji">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <ellipse cx="12" cy="5" rx="9" ry="3" fill="#8b5cf6" fill-opacity="0.18" stroke="#8b5cf6" stroke-width="1.75"/>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" stroke="#8b5cf6" stroke-width="1.75"/>
+                <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" stroke="#8b5cf6" stroke-width="1.75"/>
+              </svg>
+            </span>
             <div class="changelog-text">
-              <strong>Discovery Passport & Milestones</strong>
-              Track your global reach with real-time notification toasts as you encounter users from new countries, and celebrate milestones as you keep your feed clean.
-              <div class="changelog-image-wrapper">
-                <img src="images/Discovery Passport & Milestones.png" alt="Discovery Passport & Milestones Preview" class="changelog-preview-img">
-              </div>
+              <strong>Self-Healing Country Database</strong>
+              Upgraded our Cloudflare consensus engine and local cache to automatically evict invalid bio strings and accurately resolve 195+ countries and official regions.
             </div>
           </div>
 
           <div class="changelog-item">
-            <span class="changelog-emoji">⚡</span>
+            <span class="changelog-emoji">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="#f59e0b" fill-opacity="0.2" stroke="#f59e0b" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
             <div class="changelog-text">
-              <strong>Passive Performance Engine</strong>
-              Powered by a new IndexedDB caching layer and passive background scanning, the extension reads timeline data as you scroll, reducing active API requests to keep your browser running fast.
+              <strong>Anti-Rate-Limit & Instant Lookup Engine</strong>
+              Fixed a cache bug that skipped Cloudflare lookups on timelines, added smart request pacing to prevent X 429 rate limits, and added support for X’s latest GraphQL schema.
             </div>
           </div>
         </div>
         
-        <p class="changelog-outro">Enjoying these updates? Consider leaving a review on the store or supporting the community database on Ko-fi!</p>
+        <p class="changelog-outro">Thank you for helping keep this project independent and free for everyone!</p>
 
         <div class="modal-footer changelog-footer" style="margin-top: 20px;">
-          <a href="https://addons.mozilla.org/en-US/firefox/addon/x-twitter-flags-blocker/reviews/" target="_blank" class="review-btn-link">⭐ Leave a review</a>
+          <a href="https://ko-fi.com/incconutwo?ref=update_v122" target="_blank" class="kofi-btn-link" style="gap:8px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="#ff5e5b" xmlns="http://www.w3.org/2000/svg"><path d="M23.881 8.948c-.773-4.085-4.859-4.593-4.859-4.593H.723c-.604 0-.679.798-.679.798s-.082 7.324-.022 11.822c.164 2.424 2.586 2.672 2.586 2.672s8.267-.023 11.966-.049c2.438-.426 2.683-2.566 2.658-3.734 4.352.24 7.422-2.831 6.649-6.916zm-11.062 3.511c-1.246 1.453-4.011 3.976-4.011 3.976s-.121.119-.31.023c-.076-.057-.108-.09-.108-.09-.443-.441-3.368-3.049-4.034-3.954-.709-.965-1.041-2.7-.091-3.71.951-1.01 3.005-1.086 4.363.407 0 0 1.565-1.782 3.468-.963 1.904.82 1.832 3.011.723 4.311zm6.173.478c-.928.116-1.682.028-1.682.028V7.284h1.77s1.971.551 1.971 2.638c0 1.913-.985 2.667-2.059 3.015z"/></svg>
+            Support on Ko-fi ($5 = Lifetime Pro)
+          </a>
+          <a href="https://addons.mozilla.org/en-US/firefox/addon/x-twitter-flags-blocker/reviews/" target="_blank" class="review-btn-link" style="gap:8px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="#fbbf24" xmlns="http://www.w3.org/2000/svg"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            Leave a review
+          </a>
           <button id="closeChangelog" class="btn-secondary">Dismiss</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Ko-fi iframe Modal -->
+  <div id="kofi-modal-backdrop" class="kofi-modal-backdrop" aria-hidden="true">
+    <div class="kofi-modal-card" role="dialog" aria-modal="true" aria-labelledby="kofi-modal-title">
+      <header class="kofi-modal-header">
+        <div class="kofi-modal-title-wrapper">
+          <span class="kofi-header-icon" style="display:inline-flex;align-items:center;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="#ff5e5b" xmlns="http://www.w3.org/2000/svg"><path d="M23.881 8.948c-.773-4.085-4.859-4.593-4.859-4.593H.723c-.604 0-.679.798-.679.798s-.082 7.324-.022 11.822c.164 2.424 2.586 2.672 2.586 2.672s8.267-.023 11.966-.049c2.438-.426 2.683-2.566 2.658-3.734 4.352.24 7.422-2.831 6.649-6.916zm-11.062 3.511c-1.246 1.453-4.011 3.976-4.011 3.976s-.121.119-.31.023c-.076-.057-.108-.09-.108-.09-.443-.441-3.368-3.049-4.034-3.954-.709-.965-1.041-2.7-.091-3.71.951-1.01 3.005-1.086 4.363.407 0 0 1.565-1.782 3.468-.963 1.904.82 1.832 3.011.723 4.311zm6.173.478c-.928.116-1.682.028-1.682.028V7.284h1.77s1.971.551 1.971 2.638c0 1.913-.985 2.667-2.059 3.015z"/></svg>
+          </span>
+          <span id="kofi-modal-title" class="kofi-modal-title">Support on Ko-fi</span>
+        </div>
+        <button id="kofi-modal-close" class="kofi-modal-close-btn" aria-label="Close modal">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </header>
+
+      <div class="kofi-iframe-container">
+        <iframe 
+          id="kofi-embed-iframe"
+          title="Support incconu_two on Ko-fi"
+          src="" 
+          style="border:none;width:100%;height:100%;"
+        ></iframe>
+      </div>
+
+      <footer class="kofi-modal-footer">
+        <a href="https://ko-fi.com/incconutwo" target="_blank" rel="noopener noreferrer" class="kofi-fallback-link">
+          Open directly on Ko-fi.com ↗
+        </a>
+      </footer>
     </div>
   </div>
 

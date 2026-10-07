@@ -115,7 +115,7 @@
   // --- Passive Data Snooping ---
   
   // Skip keys known to never contain user objects — saves CPU on deep traversal
-  const SKIP_KEYS = new Set(['instructions', 'globalObjects', 'promoted_content', 'card', 'media', 'entities', 'extended_entities', 'features', 'mediaStats', 'birdwatch_pivot', 'tombstone']);
+  const SKIP_KEYS = new Set(['promoted_content', 'card', 'media', 'entities', 'extended_entities', 'features', 'mediaStats', 'birdwatch_pivot', 'tombstone', 'views', 'edit_control', 'quick_promote_eligibility', 'article', 'clientEventInfo', 'source', 'unified_card', 'quoted_status_permalink', 'display_text_range', 'note_tweet', 'author_features']);
   // Iteratively find user objects in arbitrary JSON (Timeline data) using a stack
   function extractUsersFromResponse(data) {
     const usersFound = new Map();
@@ -127,33 +127,46 @@
       const current = stack.pop();
       if (!current || typeof current !== 'object') continue;
 
-      // Check if this object looks like a User result
-      if (current.screen_name && (current.location || current.verified || current.is_blue_verified || current.about_profile)) {
-        if (!usersFound.has(current.screen_name)) {
-          const profile = current.about_profile;
-          usersFound.set(current.screen_name, {
-            screen_name: current.screen_name,
-            location: profile?.account_based_in || current.location || current.legacy?.location || null,
-            verified: !!(current.verified || current.is_blue_verified || current.legacy?.verified || current.legacy?.verified_type || current.verification_info?.is_identity_verified),
-            utc_offset: current.utc_offset ?? current.legacy?.utc_offset ?? null,
-            time_zone: current.time_zone ?? current.legacy?.time_zone ?? null,
-            is_region: profile?.location_accurate === false
-          });
-        }
-      }
-      // Also check legacy format
-      if (current.legacy && current.legacy.screen_name) {
-        const u = current.legacy;
-        if (!usersFound.has(u.screen_name)) {
-          // Legacy objects usually don't have about_profile, but checking just in case
-          const profile = current.about_profile;
-          usersFound.set(u.screen_name, {
-            screen_name: u.screen_name,
-            location: profile?.account_based_in || u.location || null,
-            verified: !!(u.verified || current.is_blue_verified || u.verified_type || current.verification_info?.is_identity_verified),
-            utc_offset: u.utc_offset ?? current.utc_offset ?? null,
-            time_zone: u.time_zone ?? current.time_zone ?? null,
-            is_region: profile?.location_accurate === false
+      // Check if this object represents or contains a User
+      const sName = current.screen_name || current.legacy?.screen_name || current.core?.screen_name;
+      if (sName && typeof sName === 'string') {
+        const uLegacy = current.legacy || {};
+        const profile = current.about_profile || uLegacy.about_profile || current.user_profile || null;
+        const isFollow = !!(current.following || uLegacy.following || current.viewer_relationship?.following);
+        const hasAccountBasedIn = !!profile?.account_based_in;
+        const loc = profile?.account_based_in || null;
+        const isVer = !!(
+          current.verified ||
+          current.is_blue_verified ||
+          uLegacy.verified ||
+          uLegacy.verified_type ||
+          current.verification_info?.is_identity_verified
+        );
+        const utc = current.utc_offset ?? uLegacy.utc_offset ?? null;
+        const tz = current.time_zone ?? uLegacy.time_zone ?? null;
+        const isReg = profile?.location_accurate === false;
+
+        const existing = usersFound.get(sName);
+        if (existing) {
+          if (isFollow) existing.following = true;
+          if (isVer) existing.verified = true;
+          if (!existing.location && loc) {
+            existing.location = loc;
+            existing.is_account_based_in = hasAccountBasedIn;
+          } else if (hasAccountBasedIn) {
+            existing.location = profile.account_based_in;
+            existing.is_account_based_in = true;
+          }
+        } else {
+          usersFound.set(sName, {
+            screen_name: sName,
+            location: loc,
+            is_account_based_in: hasAccountBasedIn,
+            verified: isVer,
+            utc_offset: utc,
+            time_zone: tz,
+            is_region: isReg,
+            following: isFollow
           });
         }
       }
@@ -168,10 +181,10 @@
           const val = current[key];
           if (val && typeof val === 'object') {
             if (SKIP_KEYS.has(key)) {
-              // Special handler for globalObjects.users
-              if (key === 'globalObjects' && val.users) {
-                stack.push(val.users);
-              }
+              continue;
+            }
+            if (key === 'globalObjects' && val.users) {
+              stack.push(val.users);
               continue;
             }
             stack.push(val);
@@ -452,7 +465,8 @@
                            userResult?.verified === true ||
                            userResult?.legacy?.verified === true ||
                            userResult?.legacy?.is_blue_verified === true;
-          sendToContent('__userDataResponse', { screenName, location, verified, is_region, requestId });
+          const following = userResult?.legacy?.following === true || userResult?.following === true;
+          sendToContent('__userDataResponse', { screenName, location, verified, is_region, following, requestId, is_account_based_in: !!location });
         } else {
           if (response.status === 429) {
             const reset = response.headers.get('x-rate-limit-reset');
