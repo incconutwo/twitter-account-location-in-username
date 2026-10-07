@@ -2,6 +2,43 @@
 
 All notable changes to the **X/Twitter Location Flags, Time & Blocker** extension will be documented in this file.
 
+## [1.2.2] - 2026-10-07
+
+### 🚀 New Features & Capabilities
+
+*   **Block VPN & Proxy Locations:**
+    *   Added a dedicated **"Block VPN / Proxy Locations"** toggle (`block_vpn_mode`) in the popup to automatically hide posts—or auto-block accounts when Auto-Block is enabled—whenever X's metadata indicates an account's location is masked by a VPN, proxy, or inaccurate regional signal (`location_accurate === false`).
+    *   Updated the hover tooltip on inaccurate locations from `(Approximate)` to `(VPN / Proxy — Location may be spoofed)` for clearer context.
+*   **Bypass Followed Accounts (Most Requested):**
+    *   Added a **"Bypass Followed Accounts"** toggle (`bypass_followed_mode`, enabled by default).
+    *   Passively extracts relationship state (`following === true` across legacy and modern X GraphQL user objects) and social context banners so accounts you follow are never hidden or auto-blocked by country or VPN filters.
+*   **1-Click Country Blocking on Dashboard:**
+    *   Added interactive **Block / Blocked** action buttons directly on each row of the "Top Countries on Your Feed" sidebar in `dashboard.html`, synchronized in real time with `chrome.storage.local`.
+*   **Embedded Ko-fi Checkout Modal:**
+    *   Added an in-app Ko-fi checkout modal (`#kofi-modal-backdrop`) in the Feed Geography Dashboard so users can support the project without leaving the dashboard tab, complete with a direct external fallback link.
+*   **Supporter Pro Activation & Perks Flow:**
+    *   Added Supporter Pro (`is_pro`) modal, activation code / Ko-fi Transaction ID verification, and priority lookup speed adjustments.
+
+### 🎨 UI/UX Enhancements
+
+*   **Custom Colored Duotone Vector SVGs:**
+    *   Replaced all native OS UI emojis across `popup.html`, `popup.js`, `dashboard.html`, `dashboard.js`, `content.js`, and `background.js` with custom colored duotone inline SVGs for pixel-perfect rendering across Windows, macOS, and Linux (while keeping Twemoji country flags intact).
+*   **Unavailable Post Tombstone Cleanup:**
+    *   Automatically detects and hides empty `"This post is unavailable"` tombstone cells on timelines to keep feeds clean.
+*   **Smarter Thread & Reply Filtering:**
+    *   When viewing a tweet thread (`/status/`), the main focal tweet author is now protected from being hidden while replies from blocked countries or VPNs are cleanly collapsed.
+
+### ⚡ Performance, Stability & Telemetry
+
+*   **Anti-Rate-Limit & Instant Lookup Engine:**
+    *   Fixed a cache-check bug where uncached handles skipped Cloudflare batch lookups (`inCache` check inside `processNode`).
+    *   Increased default Twitter GraphQL queue spacing (`750ms` free / `250ms` Pro) and added a `500ms` cooldown after every 5 consecutive requests to prevent X `429 Too Many Requests` errors.
+    *   Added support for X's updated GraphQL user schema (`result.core.screen_name`, `result.Location.location`, and `result.relationship_perspectives.following`) and cached discovered GraphQL `queryId` values in `chrome.storage.local` (`_tf_query_id`) for instant startup.
+*   **Privacy-First Anonymous Telemetry (Umami):**
+    *   Added cookie-free, anonymous aggregate event tracking (`daily_active`, `changelog_opened`, `changelog_engagement` active reading time, `kofi_clicked`, `review_clicked`, and `milestone_toast_shown`) routed through the background script to measure feature adoption without collecting any personal data or X usernames.
+
+---
+
 ## [1.2.1] - 2026-06-16
 
 ### 🚀 New Features & Capabilities

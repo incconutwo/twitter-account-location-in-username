@@ -4,14 +4,15 @@ A browser extension that displays the country flag of X.com (Twitter) users next
 
 > **Enjoying the extension?** Please consider dropping a **Star ⭐** on this repository to show your support! It helps visibility a ton.
 
-# 🆕 What's New in v1.2.1
+# 🆕 What's New in v1.2.2
 
-We've just released Version 1.2.1! Here are the main highlights:
-* **Asynchronous Webpack Interception 📡**: Offloads chunk parsing and scanning to idle periods (`requestIdleCallback`) to prevent main thread blockage during page load.
-* **Iterative Payload Parser 🏎️**: Stack-based parsing refactoring to eliminate call stack limits on deeply nested API data.
-* **Anti-Truncation Badges & Styles 📐**: Sibling DOM placement next to handles prevents X's React engine from truncating flags, and added flex-shrink guards.
-* **Platform-Specific Add-on Support 🦊**: Native Firefox Add-on review links and store redirection URLs integrated directly into the Firefox build.
-* **Standardized Debug Controls 🔧**: Standardized developer debug panel click activation timeouts across all platforms.
+We've just released Version 1.2.2! Here are the main highlights:
+* **Block VPN & Proxy Locations 🛡️**: Automatically hide or block accounts whose location is masked by a VPN, proxy, or inaccurate regional signal.
+* **Bypass Followed Accounts 🤝**: One of our most requested features by far—accounts you follow are now automatically exempted from country and VPN filters by default.
+* **1-Click Dashboard Blocking 🗺️**: Block or unblock any country directly from the "Top Countries on Your Feed" list on the Feed Geography Dashboard.
+* **Cleaner Timeline & Tombstone Removal 🧹**: Automatically removes empty *"This post is unavailable"* placeholders and protects focal tweets when viewing status threads.
+* **Anti-Rate-Limit & Instant Lookup Engine ⚡**: Fixed a cache bug that skipped Cloudflare lookups on timelines, added smart request pacing to prevent X 429 rate limits, and added support for X’s latest GraphQL schema.
+* **Crisp Vector UI Icons ✨**: Replaced all native OS UI emojis across the extension with custom colored duotone SVGs for a consistent look across Windows, macOS, and Linux.
 
 👉 *See the full technical updates and previous history in the [CHANGELOG.md](https://github.com/incconutwo/twitter-account-location-in-username/blob/main/CHANGELOG.md).*
 
@@ -28,10 +29,12 @@ There is now a crowdsourced database for location data. This makes the extension
 - **Wayyy Faster:** Cloudflare lookups take about 50ms (Twitter takes 500ms+).
 - **Save Your Limits:** This drastically reduces how often we hit Twitter's API, so the extension stays green and working longer.
 
-### 🛡️ Post Blocking (New!)
-- **Hide by Country:** Select specific countries from the extension popup to automatically hide tweets from users in those locations.
-- **Clean Feed:** Posts are removed from the DOM before they clutter your view.
-- **Easy Management:** Add or remove blocked countries instantly using the dropdown menu and chip tags in the popup.
+### 🛡️ Post & VPN Blocking (Updated!)
+- **Hide by Country:** Select specific countries from the extension popup or dashboard to automatically hide tweets from users in those locations.
+- **Block VPN / Proxy Locations:** Optionally filter out accounts whose location is flagged as masked or inaccurate due to VPN/proxy usage.
+- **Bypass Followed Accounts:** Automatically exempts people you follow so you never miss posts from friends or creators in blocked regions.
+- **Clean Feed:** Blocked posts and empty *"This post is unavailable"* tombstones are removed from the DOM before they clutter your view.
+- **Easy Management:** Add or remove blocked countries instantly using the dropdown menu and chip tags in the popup, or with one click from the Feed Geography Dashboard.
 
 ### ⚡ Performance & Efficiency
 - **Crowdsourced Database:** I've built a database using Cloudflare so now the extension checks it before ever asking Twitter. It's lightning fast (50ms vs 500ms) and keeps your API usage ultra-low.
